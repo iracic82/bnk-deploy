@@ -39,8 +39,7 @@ __ATTACHMENTS__
           value: "__MTU__"
     tmm:
       env:
-        - name: TMM_CALICO_ROUTER
-          value: default
+__CALICOROUTER__
         - name: TMM_DEFAULT_MTU
           value: "__MTU__"
         - name: ZEBOS_STATE

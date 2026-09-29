@@ -177,6 +177,29 @@ development had expired.
 
 ---
 
+## Testing on a multi node cluster
+
+`e2e-kind` runs a single node cluster, which is enough for regression but hides node selection,
+taint behaviour and DaemonSet spread. For a multi node kind cluster the host needs two sysctls
+raised first, because each node container runs its own kubelet, containerd and CNI agents and the
+defaults are too low. This is a kind requirement, not a BNK one.
+
+```bash
+sudo sysctl -w fs.inotify.max_user_instances=512
+sudo sysctl -w fs.inotify.max_user_watches=524288
+sudo sysctl -w kernel.keys.maxkeys=500000
+
+# persist
+sudo tee /etc/sysctl.d/99-kind.conf <<EOF
+fs.inotify.max_user_instances = 512
+fs.inotify.max_user_watches = 524288
+kernel.keys.maxkeys = 500000
+EOF
+```
+
+Without them `kind create cluster` fails during kubeadm on the second node with an error that does
+not mention inotify.
+
 ## Secrets
 
 Never committed. `.gitignore` blocks `*.jwt`, `cne_pull_64.json`, `f5-far-auth-key.tgz` and

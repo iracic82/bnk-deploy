@@ -13,14 +13,39 @@ if [[ -n "$srv" && "$srv" != "$want" ]]; then
   warn "cluster minor ${srv} differs from the tested ${K8S_MINOR}. BNK ${BNK_VERSION} is qualified on ${K8S_MINOR}."
 fi
 
-# CNI. FLO runs a check that blocks on unsupported CNIs, and Calico is the primary supported one.
-if kubectl get pods -A --no-headers 2>/dev/null | grep -qi calico; then
-  ok "Calico detected"
-elif kubectl get pods -A --no-headers 2>/dev/null | grep -qi cilium; then
-  die "Cilium detected. BNK is qualified on Calico and FLO may block. Use a Calico cluster."
-else
-  warn "could not identify the CNI. BNK is qualified on Calico."
-fi
+# CNI. FLO's own preflight identifies the CNI type and blocks with an ERROR if it cannot place it
+# in a supported family. Per the 2.3 software requirements, Calico v3.27.0 is the "Primary CNI.
+# Other CNIs may work but are not tested", and the documented check recognises Calico, Flannel,
+# VPC-CNI on EKS and OCI-CNI on Oracle. OVN-Kubernetes is the supported CNI on OpenShift.
+# Cilium is not mentioned anywhere in the 964 page documentation.
+detect_cni() {
+  local pods; pods=$(kubectl get pods -A -o name 2>/dev/null || true)
+  case "$pods" in
+    *calico*)   echo calico ;;
+    *cilium*)   echo cilium ;;
+    *ovnkube*|*ovn-kubernetes*) echo ovn-kubernetes ;;
+    *flannel*)  echo flannel ;;
+    *aws-node*) echo vpc-cni ;;
+    *)          echo unknown ;;
+  esac
+}
+BNK_DETECTED_CNI="$(detect_cni)"
+export BNK_DETECTED_CNI
+case "$BNK_DETECTED_CNI" in
+  calico)
+    ok "CNI calico, the primary supported CNI"
+    ;;
+  flannel|vpc-cni|ovn-kubernetes)
+    ok "CNI ${BNK_DETECTED_CNI}, recognised by the FLO preflight"
+    warn "${BNK_DETECTED_CNI} is recognised but not the primary CNI. Calico is the only one F5 tests."
+    ;;
+  cilium)
+    warn "CNI cilium. It appears nowhere in the BNK 2.3 documentation and is not in the set the FLO preflight recognises, so FLO may block the install with an ERROR. Use Calico unless you are deliberately testing this."
+    ;;
+  *)
+    warn "could not identify the CNI. FLO blocks with an ERROR when it cannot place the CNI in a supported family."
+    ;;
+esac
 
 # THE blocker the install guide never mentions. FLO watches NetworkAttachmentDefinition at
 # startup and crash loops with 'if kind is a CRD, it should be installed before calling Start'

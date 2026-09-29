@@ -4,6 +4,13 @@ prof="$HERE/profiles/${PROFILE}.yaml"
 
 sc="${BNK_STORAGECLASS:-}"
 [[ -n "$sc" ]] && kubectl get sc "$sc" >/dev/null 2>&1 || sc="$(kubectl get sc -o jsonpath='{.items[0].metadata.name}')"
+# TMM_CALICO_ROUTER only applies on Calico. The documented preflight "runs additional checks for
+# pod CIDR and TMM env var for Calico", so injecting it on Flannel or OVN would be wrong.
+calico_router=""
+if [[ "${BNK_DETECTED_CNI:-calico}" == "calico" ]]; then
+  calico_router=$'        - name: TMM_CALICO_ROUTER\n          value: default'
+fi
+
 # Build the networkAttachments block from the profile. Host mode renders nothing at all.
 attach_block=""
 if [[ -n "${BNK_NETWORK_ATTACHMENTS:-}" ]]; then
@@ -23,7 +30,7 @@ rendered=$(sed -e "s|__MANIFEST__|${CNE_RELEASE_MANIFEST}|g" \
                -e "s|__CORECOLLECT__|${BNK_CORE_COLLECTION:-false}|g" \
                -e "s|__DPUENABLED__|${BNK_DPU_ENABLED:-false}|g" \
                -e "s|__ZEBOS__|${BNK_ZEBOS_STATE:-}|g" \
-               "$prof" | awk -v blk="$attach_block" '{ if ($0=="__ATTACHMENTS__") { if (blk!="") print blk } else print }')
+               "$prof" | awk -v blk="$attach_block" -v cr="$calico_router" '{ if ($0=="__ATTACHMENTS__") { if (blk!="") print blk } else if ($0=="__CALICOROUTER__") { if (cr!="") print cr } else print }')
 
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "$rendered" | kubectl apply -n "$NS_BNK" --dry-run=server -f - >/dev/null \

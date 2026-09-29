@@ -34,8 +34,7 @@ spec:
   advanced:
     tmm:
       env:
-        - name: TMM_CALICO_ROUTER
-          value: default
+__CALICOROUTER__
         - name: TMM_DEFAULT_MTU
           value: "__MTU__"
     pseudoCNI:
