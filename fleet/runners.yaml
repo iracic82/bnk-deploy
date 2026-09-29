@@ -15,6 +15,8 @@ runners:
     description: Example. Development cluster, runner on the same host.
     environment: lab
     profile: host
+    notes: Registered with --no-service, so it runs in the background rather than as a systemd
+      unit and does not survive a reboot. Fine for a developer box, not for production.
 
   - label: prod-eu-west-1
     description: Example. Production cluster with BlueField, runner on the same host.

@@ -8,6 +8,9 @@
 # Run once per host, as a user with sudo. The runner then survives reboots as a systemd service.
 #
 # Usage:
+# Pass --no-service on a host where you cannot sudo, such as a developer box. The runner then runs
+# in the background rather than as a systemd unit, and does not survive a reboot.
+#
 #   GH_RUNNER_TOKEN=... ./install-runner.sh \
 #     --repo OWNER/REPO --label prod-eu-west-1 --env production --profile dpu
 #
@@ -19,6 +22,7 @@
 set -euo pipefail
 
 REPO=""; ENVNAME=""; PROFILE=""; RUNNER_LABEL=""; RUNNER_USER="${RUNNER_USER:-$USER}"
+NO_SERVICE=0
 RUNNER_DIR="${RUNNER_DIR:-/opt/actions-runner}"
 RUNNER_VERSION="${RUNNER_VERSION:-2.330.0}"
 
@@ -28,6 +32,7 @@ while [[ $# -gt 0 ]]; do
     --env) ENVNAME="$2"; shift 2 ;;
     --profile) PROFILE="$2"; shift 2 ;;
     --label) RUNNER_LABEL="$2"; shift 2 ;;
+    --no-service) NO_SERVICE=1; shift ;;
     --dir) RUNNER_DIR="$2"; shift 2 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown flag $1"; exit 2 ;;
@@ -46,20 +51,30 @@ RUNNER_LABEL="${RUNNER_LABEL:-$(hostname -s)}"
 LABELS="bnk,${RUNNER_LABEL},${ENVNAME},${PROFILE}"
 
 echo "### prerequisites the workflows expect on the host"
-sudo apt-get update -qq
-sudo apt-get install -y curl jq git openssl
+# Installing packages needs root. With --no-service we assume the host is already equipped, which
+# is the case on a developer box and on anything where you cannot sudo.
+if [[ "$NO_SERVICE" == "0" ]]; then
+  sudo apt-get update -qq
+  sudo apt-get install -y curl jq git openssl
+else
+  for c in curl jq git openssl; do command -v "$c" >/dev/null || die "$c missing and --no-service cannot install it"; done
+fi
 command -v kubectl >/dev/null || die "kubectl not on PATH. The runner manages this cluster, so it needs it."
-command -v helm >/dev/null || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | sudo bash
+command -v helm >/dev/null || die "helm not on PATH. Install it before registering the runner."
 if [[ "$PROFILE" == "dpu" ]]; then
-  sudo apt-get install -y sshpass
+  if [[ "$NO_SERVICE" == "0" ]]; then sudo apt-get install -y sshpass; else command -v sshpass >/dev/null || die "sshpass missing"; fi
   command -v yq >/dev/null || die "yq not on PATH, the dpubnkctl wizard post-script needs it"
 fi
 kubectl version --request-timeout=10s >/dev/null 2>&1 || die "this host cannot reach a cluster. Fix kubectl first."
 echo "    cluster reachable: $(kubectl config current-context)"
 
 echo "### runner ${RUNNER_VERSION} into ${RUNNER_DIR}"
-sudo mkdir -p "$RUNNER_DIR"
-sudo chown "$RUNNER_USER" "$RUNNER_DIR"
+if [[ "$NO_SERVICE" == "1" ]]; then
+  mkdir -p "$RUNNER_DIR" || die "cannot create $RUNNER_DIR. With --no-service, pass --dir to somewhere you own."
+else
+  sudo mkdir -p "$RUNNER_DIR"
+  sudo chown "$RUNNER_USER" "$RUNNER_DIR"
+fi
 cd "$RUNNER_DIR"
 if [[ ! -x ./config.sh ]]; then
   curl -fsSLo runner.tar.gz \
@@ -78,11 +93,20 @@ else
     --work _work
 fi
 
-echo "### systemd service so it survives reboots"
-sudo ./svc.sh install "$RUNNER_USER"
-sudo ./svc.sh start
-sleep 3
-sudo ./svc.sh status | head -5
+if [[ "$NO_SERVICE" == "1" ]]; then
+  echo "### starting the runner in the background, no systemd"
+  # Useful for a developer box or any host where you cannot sudo. It does not survive a reboot.
+  nohup ./run.sh > "${RUNNER_DIR}/runner.log" 2>&1 &
+  sleep 8
+  grep -E 'Listening for Jobs|Connected to GitHub' "${RUNNER_DIR}/runner.log" | tail -2 \
+    || { echo "runner did not report ready, see ${RUNNER_DIR}/runner.log"; tail -15 "${RUNNER_DIR}/runner.log"; exit 1; }
+else
+  echo "### systemd service so it survives reboots"
+  sudo ./svc.sh install "$RUNNER_USER"
+  sudo ./svc.sh start
+  sleep 3
+  sudo ./svc.sh status | head -5
+fi
 
 cat <<DONE
 
@@ -98,5 +122,7 @@ as a repository secret for this environment. You still need FAR_PULL_B64 and BNK
 because those are F5 credentials rather than cluster ones.
 
 To remove it later:
-  cd ${RUNNER_DIR} && sudo ./svc.sh stop && sudo ./svc.sh uninstall && ./config.sh remove --token <fresh token>
+  cd ${RUNNER_DIR}
+  $([[ "$NO_SERVICE" == "1" ]] && echo 'pkill -f "$RUNNER_DIR/bin/Runner.Listener"' || echo 'sudo ./svc.sh stop && sudo ./svc.sh uninstall')
+  ./config.sh remove --token <a fresh registration token>
 DONE
