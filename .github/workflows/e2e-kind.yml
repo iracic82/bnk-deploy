@@ -25,7 +25,16 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - run: cat versions.env >> "$GITHUB_ENV"
+      - name: load pinned versions
+        # versions.env carries comments and blank lines, which GITHUB_ENV rejects, so only pass
+        # through the actual assignments.
+        # GITHUB_ENV takes the whole line as the value, so a trailing comment would become part of
+        # it and CALICO_VERSION would end up as "v3.29.1    # ...". Strip comments and whitespace.
+        run: |
+          grep -E '^[A-Z_]+=' versions.env \
+            | sed -E 's/[[:space:]]*#.*$//; s/[[:space:]]+$//' \
+            >> "$GITHUB_ENV"
+          echo "loaded:"; grep -E '^(CALICO|MULTUS|CERT_MANAGER|K8S)' "$GITHUB_ENV" | sed 's/^/  /'"'"
 
       - uses: helm/kind-action@v1
         with:

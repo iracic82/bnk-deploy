@@ -4,33 +4,15 @@ prof="$HERE/profiles/${PROFILE}.yaml"
 
 sc="${BNK_STORAGECLASS:-}"
 [[ -n "$sc" ]] && kubectl get sc "$sc" >/dev/null 2>&1 || sc="$(kubectl get sc -o jsonpath='{.items[0].metadata.name}')"
-# TMM_CALICO_ROUTER only applies on Calico. The documented preflight "runs additional checks for
-# pod CIDR and TMM env var for Calico", so injecting it on Flannel or OVN would be wrong.
-calico_router=""
-if [[ "${BNK_DETECTED_CNI:-calico}" == "calico" ]]; then
-  calico_router=$'        - name: TMM_CALICO_ROUTER\n          value: default'
-fi
+# shellcheck disable=SC1091
+source "$HERE/lib/render.sh"
 
-# Build the networkAttachments block from the profile. Host mode renders nothing at all.
-attach_block=""
-if [[ -n "${BNK_NETWORK_ATTACHMENTS:-}" ]]; then
-  attach_block="  networkAttachments:"
-  IFS=',' read -ra _na <<< "$BNK_NETWORK_ATTACHMENTS"
-  for a in "${_na[@]}"; do attach_block+=$'\n'"    - ${a}"; done
+sc="${BNK_STORAGECLASS:-}"
+if [[ -z "$sc" ]] || ! kubectl get sc "$sc" >/dev/null 2>&1; then
+  sc="$(kubectl get sc -o jsonpath='{.items[0].metadata.name}')"
 fi
-
-rendered=$(sed -e "s|__MANIFEST__|${CNE_RELEASE_MANIFEST}|g" \
-               -e "s|__REPO__|${CNE_REPO}|g" \
-               -e "s|__ISSUER__|${CLUSTER_ISSUER}|g" \
-               -e "s|__STORAGECLASS__|${sc}|g" \
-               -e "s|__PODCIDR__|${BNK_POD_CIDR:-192.168.0.0/16}|g" \
-               -e "s|__SIZE__|${BNK_DEPLOYMENT_SIZE:-Small}|g" \
-               -e "s|__MTU__|${BNK_TMM_MTU:-1500}|g" \
-               -e "s|__DYNROUTE__|${BNK_DYNAMIC_ROUTING:-false}|g" \
-               -e "s|__CORECOLLECT__|${BNK_CORE_COLLECTION:-false}|g" \
-               -e "s|__DPUENABLED__|${BNK_DPU_ENABLED:-false}|g" \
-               -e "s|__ZEBOS__|${BNK_ZEBOS_STATE:-}|g" \
-               "$prof" | awk -v blk="$attach_block" -v cr="$calico_router" '{ if ($0=="__ATTACHMENTS__") { if (blk!="") print blk } else if ($0=="__CALICOROUTER__") { if (cr!="") print cr } else print }')
+_render_sc="$sc"
+rendered="$(render_cneinstance "$prof")"
 
 if [[ "$DRY_RUN" == "1" ]]; then
   if echo "$rendered" | kubectl apply -n "$NS_BNK" --dry-run=server -f - >/dev/null; then
