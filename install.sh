@@ -130,6 +130,7 @@ PHASES=(
 for entry in "${PHASES[@]}"; do
   id="${entry%%:*}"; desc="${entry#*:}"; num="${id%%-*}"
   [[ -n "$ONLY_PHASE" && "$num" != "$ONLY_PHASE" ]] && continue
+  # preflight may have turned SKIP_LICENSE on, for an environment that does not require a licence
   if [[ "$num" == "60" && "$SKIP_LICENSE" == "1" ]]; then
     log "$desc"
     [[ "${BNK_REQUIRE_LICENSE}" == "true" ]] \

@@ -4,6 +4,18 @@
 for c in kubectl helm openssl base64 tar; do command -v "$c" >/dev/null || die "$c not on PATH"; done
 ok "tooling present"
 
+# Decide the licence situation now rather than after phase 50 has spent its whole timeout.
+# An apply with no licence in an environment that requires one failed ten minutes in, having
+# waited for an Available condition that can never be reached unlicensed.
+if [[ "${SKIP_LICENSE:-0}" == "0" && -z "${BNK_LICENSE_JWT:-}" ]]; then
+  if [[ "${BNK_REQUIRE_LICENSE:-true}" == "true" ]]; then
+    die "no BNK_LICENSE_JWT and ${BNK_ENV_NAME} requires a licence. Set it, or use an environment that does not."
+  fi
+  # The environment declares a licence is not required, so honour that rather than demanding one.
+  warn "no BNK_LICENSE_JWT. ${BNK_ENV_NAME} does not require one, so continuing unlicensed."
+  SKIP_LICENSE=1; export SKIP_LICENSE
+fi
+
 kubectl version --request-timeout=15s >/dev/null 2>&1 || die "no reachable cluster, check KUBECONFIG"
 srv=$(kubectl version -o json 2>/dev/null | sed -n 's/.*"minor": *"\([0-9]*\)".*/\1/p' | tail -1)
 maj=$(kubectl version -o json 2>/dev/null | sed -n 's/.*"major": *"\([0-9]*\)".*/\1/p' | tail -1)
