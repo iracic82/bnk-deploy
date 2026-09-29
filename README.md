@@ -167,13 +167,22 @@ Run against a real Kubernetes 1.30 cluster with Calico, host profile, unlicensed
 | CNEInstance | applied, 9 of 9 pods in `f5-bnk`, 10 in `f5-cne-core` |
 | Second run | idempotent, every phase detected existing state |
 | All 8 env and profile combinations | validate server side, rendered objects differ correctly |
+| **Three node cluster**, 1 control plane + 2 workers | full install clean. Calico and Multus spread as DaemonSets, `f5-dssm-db` and `f5-dssm-sentinel` distributed one replica per node, 13 pods in `f5-cne-core` and 9 in `f5-bnk`, every container ready |
 
-**Not verified: TMM, and a fully `Available` CNEInstance.** On kind, `f5-spk-csrc`'s
-`f5-fluentbit` sidecar crash loops on a plugin load fault, and TMM waits behind CSRC. Allocating
-hugepages fixed the node side, the node reports 4Gi allocatable, but the sidecar is the remaining
-gate. That is a kind limitation rather than an installer fault, so a real host is where TMM should
-be proven. Licensed installs are also unverified, because the eval licence available during
-development had expired.
+**TMM cannot be verified without a licence, and that is by design.** `f5-cne-controller` logs
+`License is not enabled.. skip Resource controllers` and never creates the TMM workload. So an
+unlicensed install correctly brings up the whole control plane and deliberately withholds the data
+plane. `--skip-license` can never produce a running TMM, on any cluster, however it is configured.
+Phase 70 knows this and reports it as expected rather than as a failure.
+
+That means a licensed install is the one remaining untested path, including everything downstream
+of `License` reaching `Active`. The eval token available during development had expired.
+
+Two other things were ruled out along the way, worth recording so nobody re-chases them. On a
+single node cluster `f5-spk-csrc`'s `f5-fluentbit` sidecar crash loops on a plugin load fault, and
+it does not on three nodes, so that was a single node artefact. And allocating hugepages is
+necessary but not sufficient: the node reports 4Gi allocatable and TMM still does not appear,
+because the licence gate sits in front of scheduling entirely.
 
 ---
 
