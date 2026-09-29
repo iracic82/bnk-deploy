@@ -1,0 +1,80 @@
+name: BNK DPU deploy
+
+# Bare metal DPU deployment through F5's dpubnkctl. Manual only, and it runs on a self hosted
+# runner that IS the jumphost, because the tool needs SSH reachability to the host and the DPU.
+#
+# Runner setup, once per jumphost:
+#   docker, yq, sshpass, skopeo, and the dpubnkctl binary at dpubnkctl/bin/dpubnkctl
+#   SSH key based access to HOST_ADDR
+#
+# Repository secrets:
+#   FAR_AUTH_KEY_B64   base64 of f5-far-auth-key.tgz
+#   BNK_LICENSE_JWT    licence token
+# Site files live in git at dpubnkctl/env/<site>.env and hold no secrets.
+
+on:
+  workflow_dispatch:
+    inputs:
+      site:
+        description: 'Site file in dpubnkctl/env'
+        required: true
+        default: 'tokyo'
+      action:
+        description: 'What to do'
+        required: true
+        default: 'deploy'
+        type: choice
+        options: [wizard-only, deploy, verify, destroy]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck -s bash -e SC1090,SC1091,SC2029 dpubnkctl/*.sh dpubnkctl/post-scripts/*.sh
+      - name: site file must exist and carry no secrets
+        run: |
+          f="dpubnkctl/env/${{ inputs.site }}.env"
+          [ -f "$f" ] || { echo "missing $f"; exit 1; }
+          grep -iE '(jwt|password|secret|token)[[:space:]]*=[[:space:]]*[^[:space:]]' "$f" \
+            && { echo "site file appears to contain a secret"; exit 1; } || echo "site file clean"
+
+  deploy:
+    needs: lint
+    runs-on: [self-hosted, jumphost]
+    environment: bnk-dpu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: stage secrets outside the workspace
+        env:
+          FAR_AUTH_KEY_B64: ${{ secrets.FAR_AUTH_KEY_B64 }}
+          BNK_LICENSE_JWT: ${{ secrets.BNK_LICENSE_JWT }}
+        run: |
+          K="$RUNNER_TEMP/keys"; mkdir -p "$K"; chmod 700 "$K"
+          printf '%s' "$FAR_AUTH_KEY_B64" | base64 -d > "$K/f5-far-auth-key.tgz"
+          printf '%s' "$BNK_LICENSE_JWT"  > "$K/.jwt"
+          chmod 600 "$K"/*
+          echo "DPUBNKCTL_KEYS=$K" >> "$GITHUB_ENV"
+
+      - name: wizard only
+        if: inputs.action == 'wizard-only'
+        run: ./dpubnkctl/run.sh --site ${{ inputs.site }} --stage wizard
+
+      - name: deploy
+        if: inputs.action == 'deploy'
+        run: ./dpubnkctl/run.sh --site ${{ inputs.site }}
+
+      - name: verify
+        if: inputs.action == 'verify'
+        run: ./dpubnkctl/run.sh --site ${{ inputs.site }} --verify
+
+      - name: destroy
+        if: inputs.action == 'destroy'
+        run: ./dpubnkctl/run.sh --site ${{ inputs.site }} --destroy
+
+      - name: always wipe staged secrets
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/keys"

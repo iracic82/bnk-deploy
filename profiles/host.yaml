@@ -1,0 +1,44 @@
+# BNK on Host. TMM runs as a software pod on host CPU.
+# No scalable functions, no SR-IOV, no VFIO, no NetworkAttachmentDefinitions. Verified against
+# the f5-tmm chart, whose defaults are network.attachment empty and vfio.enabled false, and
+# against the CNEInstance CRD schema, which requires only certificate, deploymentSize,
+# manifestVersion, product and registry.
+apiVersion: k8s.f5.com/v1
+kind: CNEInstance
+metadata:
+  name: f5-bnk-instance
+spec:
+  product:
+    gatewayAPI: true
+    type: BNK
+  manifestVersion: "__MANIFEST__"
+  wholeCluster: true
+  dpu:
+    enabled: __DPUENABLED__
+  telemetry:
+    loggingSubsystem: { enabled: true }
+    metricSubsystem: { enabled: true }
+  certificate:
+    clusterIssuer: __ISSUER__
+  deploymentSize: __SIZE__
+  registry:
+    uri: __REPO__
+    imagePullSecrets:
+      - name: far-pull-secret
+    imagePullPolicy: IfNotPresent
+  storageClassName: __STORAGECLASS__
+  dynamicRouting: { enabled: __DYNROUTE__ }
+  firewallACL: { enabled: true }
+  pseudoCNI: { enabled: true }
+  coreCollection: { enabled: __CORECOLLECT__ }
+  advanced:
+    tmm:
+      env:
+        - name: TMM_CALICO_ROUTER
+          value: default
+        - name: TMM_DEFAULT_MTU
+          value: "__MTU__"
+    pseudoCNI:
+      env:
+        - name: EXCLUDE_CIDR
+          value: "__PODCIDR__"

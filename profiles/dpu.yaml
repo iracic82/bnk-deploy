@@ -1,0 +1,51 @@
+# BNK on DPU. TMM runs on BlueField-3 with DOCA offload.
+# Requires the SR-IOV device plugin, scalable functions with trust on, hugepages on the DPU,
+# and two NetworkAttachmentDefinitions named below.
+apiVersion: k8s.f5.com/v1
+kind: CNEInstance
+metadata:
+  name: f5-bnk-instance
+spec:
+  product:
+    gatewayAPI: true
+    type: BNK
+  manifestVersion: "__MANIFEST__"
+  wholeCluster: true
+  dpu:
+    enabled: __DPUENABLED__
+  telemetry:
+    loggingSubsystem: { enabled: true }
+    metricSubsystem: { enabled: true }
+  certificate:
+    clusterIssuer: __ISSUER__
+  deploymentSize: __SIZE__
+  registry:
+    uri: __REPO__
+    imagePullSecrets:
+      - name: far-pull-secret
+    imagePullPolicy: IfNotPresent
+__ATTACHMENTS__
+  storageClassName: __STORAGECLASS__
+  dynamicRouting: { enabled: __DYNROUTE__ }
+  firewallACL: { enabled: true }
+  pseudoCNI: { enabled: true }
+  coreCollection: { enabled: __CORECOLLECT__ }
+  advanced:
+    envDiscovery:
+      enabled: false
+    cneController:
+      env:
+        - name: TMM_DEFAULT_MTU
+          value: "__MTU__"
+    tmm:
+      env:
+        - name: TMM_CALICO_ROUTER
+          value: default
+        - name: TMM_DEFAULT_MTU
+          value: "__MTU__"
+        - name: ZEBOS_STATE
+          value: "__ZEBOS__"
+    pseudoCNI:
+      env:
+        - name: EXCLUDE_CIDR
+          value: "__PODCIDR__"

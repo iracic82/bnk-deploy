@@ -1,0 +1,5 @@
+# secrets, never committed
+*.jwt
+cne_pull_64.json
+f5-far-auth-key.tgz
+kubeconfig

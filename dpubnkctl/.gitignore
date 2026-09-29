@@ -1,0 +1,6 @@
+bin/
+keys/
+*.jwt
+*f5-far-auth-key*
+env/*.env
+!env/example.env
