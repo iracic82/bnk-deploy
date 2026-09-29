@@ -86,7 +86,7 @@ mkdir -p "${POC_DIR}/post-scripts"
 install -m 755 "$HERE"/post-scripts/*.sh "${POC_DIR}/post-scripts/"
 # the post-scripts read the site file, so make it reachable from where dpubnkctl runs them
 ln -sfn "$SITE_ENV" "${POC_DIR}/post-scripts/site.env"
-ok "keys and $(ls -1 "$HERE"/post-scripts/*.sh | wc -l) post-scripts staged"
+ok "keys and $(find "$HERE/post-scripts" -maxdepth 1 -name '*.sh' | wc -l) post-scripts staged"
 
 log "Discovery wizard"
 "$BIN" discover wizard --poc "$POC_NAME"

@@ -18,11 +18,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: contract tests
+        run: ./tests/contract.sh
+
       - name: shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y shellcheck
           shellcheck -s bash -e SC1090,SC1091,SC2029 install.sh uninstall.sh bootstrap/*.sh dpubnkctl/*.sh dpubnkctl/post-scripts/*.sh
           shellcheck -s bash -e SC1090,SC1091,SC2034,SC2154,SC2148 lib/*.sh
+
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
 
       - name: every version is pinned, none floating
         run: |
@@ -72,8 +80,26 @@ jobs:
           done
           echo "inventory valid, all selectors resolve"
 
-      - name: fleet and site files parse
-        run: python3 -c "import yaml;[yaml.safe_load(open(f)) and print('ok',f) for f in ['fleet/runners.yaml','bootstrap/site.yml']]"
+      - name: every non-template yaml file parses
+        run: |
+          pip install --quiet pyyaml
+          python3 - <<'EX'
+          import glob, sys, yaml
+          # profiles/*.yaml are templates carrying __PLACEHOLDER__ lines and are checked by the
+          # render step above instead. ci/calico-installation.yaml is multi document.
+          files = sorted(set(
+              glob.glob('.github/workflows/*.yml') + glob.glob('.github/*.yaml') +
+              glob.glob('ci/*.yaml') + glob.glob('clusters/*.yaml') +
+              glob.glob('fleet/*.yaml') + glob.glob('bootstrap/*.yml')))
+          bad = 0
+          for f in files:
+              try:
+                  list(yaml.safe_load_all(open(f)))
+                  print('ok  ', f)
+              except Exception as e:
+                  print('FAIL', f, e); bad += 1
+          sys.exit(1 if bad else 0)
+          EX
 
       - name: mermaid diagrams in the docs actually parse
         run: |

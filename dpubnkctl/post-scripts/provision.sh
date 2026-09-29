@@ -15,7 +15,9 @@ command -v sshpass >/dev/null || { echo "sshpass not installed on the jumphost";
 # The DPU host key changes on every reflash, so clear it rather than failing on a mismatch.
 ssh-keygen -f "$HOME/.ssh/known_hosts" -R "$DPU_ADDR" >/dev/null 2>&1 || true
 
-export SSHPASS="$(tr -d '\r\n' < "$PW_FILE")"
+SSHPASS=$(tr -d '\r\n' < "$PW_FILE") || { echo "cannot read $PW_FILE"; exit 1; }
+[[ -n "$SSHPASS" ]] || { echo "$PW_FILE is empty"; exit 1; }
+export SSHPASS
 dpu() { sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "ubuntu@${DPU_ADDR}" "$@"; }
 
 echo "configuring OVS bridges on ${DPU_ADDR}"

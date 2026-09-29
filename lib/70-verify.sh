@@ -33,6 +33,6 @@ else
 fi
 
 echo
-echo "    pods: $(kubectl get pods -n $NS_CORE --no-headers 2>/dev/null | grep -c Running) running in $NS_CORE, $(kubectl get pods -n $NS_BNK --no-headers 2>/dev/null | grep -c Running) in $NS_BNK"
+echo "    pods: $(kubectl get pods -n "$NS_CORE" --no-headers 2>/dev/null | grep -c Running) running in $NS_CORE, $(kubectl get pods -n "$NS_BNK" --no-headers 2>/dev/null | grep -c Running) in $NS_BNK"
 [[ "$fails" -gt 0 ]] && die "$fails verification check(s) failed"
 ok "all checks passed"

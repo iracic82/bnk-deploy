@@ -1,0 +1,9 @@
+# Declare the self hosted runner labels this repo uses, so actionlint can check runs-on properly
+# instead of reporting every custom label as unknown.
+self-hosted-runner:
+  labels:
+    - bnk          # project label, every BNK runner carries it
+    - bnk-hub      # the shared hub runner that holds many kubeconfigs
+    - jumphost     # a jumphost that can reach bare metal DPUs
+    - puget-lab
+    - tokyo-dpu-1

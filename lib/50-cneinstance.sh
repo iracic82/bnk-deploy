@@ -33,8 +33,11 @@ rendered=$(sed -e "s|__MANIFEST__|${CNE_RELEASE_MANIFEST}|g" \
                "$prof" | awk -v blk="$attach_block" -v cr="$calico_router" '{ if ($0=="__ATTACHMENTS__") { if (blk!="") print blk } else if ($0=="__CALICOROUTER__") { if (cr!="") print cr } else print }')
 
 if [[ "$DRY_RUN" == "1" ]]; then
-  echo "$rendered" | kubectl apply -n "$NS_BNK" --dry-run=server -f - >/dev/null \
-    && ok "CNEInstance (${PROFILE}) validates server side" || die "CNEInstance rejected"
+  if echo "$rendered" | kubectl apply -n "$NS_BNK" --dry-run=server -f - >/dev/null; then
+    ok "CNEInstance (${PROFILE}) validates server side"
+  else
+    die "CNEInstance rejected by the API server"
+  fi
   return 0
 fi
 echo "$rendered" | kubectl apply -n "$NS_BNK" -f - >/dev/null

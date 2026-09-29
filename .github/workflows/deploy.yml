@@ -84,17 +84,19 @@ jobs:
           else
             echo "runner sits beside its cluster, using its own kubectl access"
           fi
-          echo "CTX_ARG=${CTX:+--context $CTX}" >> "$GITHUB_ENV"
+          # Export it rather than splicing an argument, so no step relies on word splitting.
+          echo "KUBE_CONTEXT=$CTX" >> "$GITHUB_ENV"
 
       - name: show what we are about to do
         run: |
+          [ -n "${KUBE_CONTEXT:-}" ] && kubectl config use-context "$KUBE_CONTEXT"
           echo "cluster  ${{ inputs.cluster_name || 'unnamed' }}"
           echo "runner   ${{ inputs.runner_label }}"
           echo "env      ${{ inputs.environment }}"
           echo "profile  ${{ inputs.profile }}"
           echo "action   ${{ inputs.action }}"
-          kubectl ${CTX_ARG} config current-context
-          kubectl ${CTX_ARG} get nodes -o wide
+          kubectl config current-context
+          kubectl get nodes -o wide
 
       - name: credentials
         env:
@@ -110,7 +112,7 @@ jobs:
           FAR_PULL_JSON: ${{ runner.temp }}/far.json
         run: |
           ./install.sh --env ${{ inputs.environment }} --profile ${{ inputs.profile }} \
-            ${CTX_ARG} --dry-run --skip-license
+            --dry-run --skip-license
 
       - name: apply
         if: inputs.action == 'apply'
@@ -121,13 +123,13 @@ jobs:
           BNK_POD_CIDR: ${{ inputs.pod_cidr }}
         run: |
           ./install.sh --env ${{ inputs.environment }} --profile ${{ inputs.profile }} \
-            ${CTX_ARG} ${{ inputs.skip_license && '--skip-license' || '' }}
+            ${{ inputs.skip_license && '--skip-license' || '' }}
 
       - name: verify only
         if: inputs.action == 'verify'
         env:
           FAR_PULL_JSON: ${{ runner.temp }}/far.json
-        run: ./install.sh --env ${{ inputs.environment }} ${CTX_ARG} --phase 70
+        run: ./install.sh --env ${{ inputs.environment }} --phase 70
 
       - name: uninstall
         if: inputs.action == 'uninstall'

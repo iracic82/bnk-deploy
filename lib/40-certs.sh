@@ -7,12 +7,15 @@ if kubectl get secret -n "$NS_CORE" cwc-license-certs >/dev/null 2>&1 \
    || kubectl get secret -n "$NS_CORE" -o name 2>/dev/null | grep -q cwc; then
   ok "CWC certs already present"
 else
-  work=$(mktemp -d); pushd "$work" >/dev/null
+  work=$(mktemp -d)
+  # pushd must not be allowed to fail silently, or the applies below run in the wrong directory
+  pushd "$work" >/dev/null || die "cannot enter $work"
   helm pull "oci://${CNE_REPO}/utils/f5-cert-gen" --version "$CERT_GEN_VERSION" >/dev/null
   tar xzf f5-cert-gen-*.tgz
   sh cert-gen/gen_cert.sh -s=api-server -a="f5-spk-cwc.${NS_CORE}.svc.cluster.local" -n=1 >/dev/null
   kubectl apply -n "$NS_CORE" -f cwc-license-certs.yaml -f cwc-license-client-certs.yaml >/dev/null
-  popd >/dev/null; rm -rf "$work"
+  popd >/dev/null || true
+  rm -rf "$work"
   ok "CWC certs generated with cert-gen ${CERT_GEN_VERSION}"
 fi
 

@@ -12,6 +12,7 @@
 #   ./install.sh --env demo --dry-run          validate server side, change nothing
 #   ./install.sh --env lab --skip-license      install unlicensed
 #   ./install.sh --env demo --context prod-eu  select a kubectl context, for a hub runner
+#   KUBE_CONTEXT=prod-eu ./install.sh --env demo   the same thing from the environment
 #
 # Environment files live in environments/. Version pins live in versions.env. Neither holds
 # secrets. Secrets come from the process environment only:
@@ -21,7 +22,25 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-BNK_ENV=""; PROFILE_OVERRIDE=""; ONLY_PHASE=""; SKIP_LICENSE=0; DRY_RUN=0; KUBE_CONTEXT=""
+# Globs rather than ls piped into grep, so filenames with anything unusual in them cannot confuse
+# the listing. environments/<env>.<profile>.env files are combination overrides, not environments,
+# so they are filtered out by counting dots.
+list_envs() {
+  local f b
+  for f in "$HERE"/environments/*.env; do
+    b="$(basename "$f" .env)"
+    [[ "$b" == *.* ]] && continue
+    printf '%s\n' "$b"
+  done
+}
+list_profiles() {
+  local f
+  for f in "$HERE"/profiles/*.env; do printf '%s\n' "$(basename "$f" .env)"; done
+}
+
+# KUBE_CONTEXT may also arrive from the environment, which is how the workflows pass it.
+BNK_ENV=""; PROFILE_OVERRIDE=""; ONLY_PHASE=""; SKIP_LICENSE=0; DRY_RUN=0
+KUBE_CONTEXT="${KUBE_CONTEXT:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --env) BNK_ENV="$2"; shift 2 ;;
@@ -30,8 +49,8 @@ while [[ $# -gt 0 ]]; do
     --skip-license) SKIP_LICENSE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --context) KUBE_CONTEXT="$2"; shift 2 ;;
-    --list-env) ls -1 "$HERE/environments" | grep -vE '\..*\.env$' | sed 's/\.env$//'; exit 0 ;;
-    --list-profile) ls -1 "$HERE/profiles"/*.env | xargs -n1 basename | sed 's/\.env$//'; exit 0 ;;
+    --list-env) list_envs; exit 0 ;;
+    --list-profile) list_profiles; exit 0 ;;
     -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
     *) echo "unknown flag $1"; exit 2 ;;
   esac
@@ -46,7 +65,7 @@ done
 source "$HERE/versions.env"
 
 [[ -n "$BNK_ENV" ]] || {
-  echo "pass --env <name>. Available: $(ls -1 "$HERE/environments" | grep -vE '\..*\.env$' | sed 's/\.env$//' | tr '\n' ' ')"
+  echo "pass --env <name>. Available: $(list_envs| tr '\n' ' ')"
   exit 2
 }
 ENV_FILE="$HERE/environments/${BNK_ENV}.env"
@@ -57,7 +76,7 @@ source "$ENV_FILE"
 # Every environment supports both profiles. The environment only supplies a default.
 PROFILE="${PROFILE_OVERRIDE:-${BNK_DEFAULT_PROFILE:-host}}"
 PROFILE_ENV="$HERE/profiles/${PROFILE}.env"
-[[ -r "$PROFILE_ENV" ]] || { echo "no profile at $PROFILE_ENV. Available: $(ls -1 "$HERE/profiles"/*.env | xargs -n1 basename | sed 's/\.env$//' | tr '\n' ' ')"; exit 2; }
+[[ -r "$PROFILE_ENV" ]] || { echo "no profile at $PROFILE_ENV. Available: $(list_profiles | tr '\n' ' ')"; exit 2; }
 # shellcheck disable=SC1090
 source "$PROFILE_ENV"
 

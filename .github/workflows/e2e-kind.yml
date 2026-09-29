@@ -35,7 +35,7 @@ jobs:
 
       - name: Calico
         run: |
-          kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/tigera-operator.yaml
+          kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/"${CALICO_VERSION}"/manifests/tigera-operator.yaml
           sleep 15
           kubectl create -f ci/calico-installation.yaml
           kubectl wait --for=condition=Ready node --all --timeout=300s

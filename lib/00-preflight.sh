@@ -76,9 +76,11 @@ if [[ "${BNK_NEEDS_SRIOV:-false}" == "true" ]]; then
     warn "no node advertises nvidia.com/bf3_* resources. The DPU profile needs the SR-IOV device plugin and scalable functions. Use dpubnkctl/run.sh if the nodes are not provisioned."
   fi
   for a in ${BNK_NETWORK_ATTACHMENTS//,/ }; do
-    kubectl get net-attach-def "$a" -n "$NS_BNK" >/dev/null 2>&1 \
-      && ok "NetworkAttachmentDefinition $a present" \
-      || warn "NetworkAttachmentDefinition $a missing in $NS_BNK"
+    if kubectl get net-attach-def "$a" -n "$NS_BNK" >/dev/null 2>&1; then
+      ok "NetworkAttachmentDefinition $a present"
+    else
+      warn "NetworkAttachmentDefinition $a missing in $NS_BNK"
+    fi
   done
 fi
 ok "profile ${BNK_PROFILE_NAME:-host}, dpu=${BNK_DPU_ENABLED:-false}, mtu=${BNK_TMM_MTU:-1500}"
