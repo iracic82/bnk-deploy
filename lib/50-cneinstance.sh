@@ -41,41 +41,53 @@ echo "$rendered" | kubectl apply -n "$NS_BNK" -f - >/dev/null
 ok "CNEInstance applied, profile ${PROFILE}"
 echo "    waiting for the operator to lay down the stack, this takes several minutes"
 
-# Do NOT wait on "running pods == total pods". A StatefulSet that has not yet created its next
-# replica reports 2 of 2 running, which reads as complete and exits the wait early. Found on a
-# three node cluster where f5-dssm-db was still working up to its third replica.
+# Do NOT wait on "running pods == total pods". A StatefulSet that has not created its next replica
+# yet reports 2 of 2 running, which reads as complete and exits early. Seen on a three node cluster
+# where f5-dssm-db was still working up to its third replica.
 #
-# The CNEInstance's own Available condition is the authoritative signal, and its sub-conditions
-# say exactly what is outstanding. Wait on that, and report the truth on timeout rather than
-# implying success.
+# The target also depends on licensing. Without a licence f5-cne-controller logs
+# "License is not enabled.. skip Resource controllers" and never creates TMM, so Available can
+# never become True. A licensed run waits for Available. An unlicensed run waits for every
+# condition that a licence does not gate.
 deadline=$(( $(date +%s) + ${BNK_WAIT_TIMEOUT:-900} ))
-avail=""
+avail=""; pending=""; conds=""
 while [[ $(date +%s) -lt $deadline ]]; do
-  avail=$(kubectl get cneinstance f5-bnk-instance -n "$NS_BNK" \
-            -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || true)
-  [[ "$avail" == "True" ]] && break
-  pending=$(kubectl get cneinstance f5-bnk-instance -n "$NS_BNK" \
-              -o jsonpath='{range .status.conditions[*]}{.type}={.status} {end}' 2>/dev/null \
-              | tr ' ' '\n' | grep '=False$' | sed 's/=False//' | paste -sd, - || true)
-  printf '\r    waiting, outstanding: %-60s' "${pending:-starting up}"
+  conds=$(kubectl get cneinstance f5-bnk-instance -n "$NS_BNK" \
+            -o jsonpath='{range .status.conditions[*]}{.type}={.status} {end}' 2>/dev/null || true)
+  avail=$(printf '%s\n' "$conds" | tr ' ' '\n' | sed -n 's/^Available=//p' | head -1)
+  if [[ "$avail" == "True" ]]; then break; fi
+
+  if [[ "${SKIP_LICENSE:-0}" == "1" ]]; then
+    pending=$(printf '%s\n' "$conds" | tr ' ' '\n' | grep '=False$' \
+                | grep -vE '^(Available|F5TmmAvailable)=' | sed 's/=False//' | paste -sd, - || true)
+    # everything a licence does not gate is satisfied, so this is as far as it can get
+    if [[ -z "$pending" && -n "$conds" ]]; then break; fi
+  else
+    pending=$(printf '%s\n' "$conds" | tr ' ' '\n' | grep '=False$' \
+                | sed 's/=False//' | paste -sd, - || true)
+  fi
+  printf '\r    waiting, outstanding: %-58s' "${pending:-starting up}"
+  progress_shown=1
   sleep 15
 done
-printf '\r%-80s\r' ' '
+[[ "${progress_shown:-0}" == "1" ]] && printf '\r%-80s\r' ' '
 
 if [[ "$avail" == "True" ]]; then
   ok "CNEInstance Available"
+elif [[ "${SKIP_LICENSE:-0}" == "1" && -z "$pending" && -n "$conds" ]]; then
+  ok "control plane ready. Available stays False without a licence, which is expected"
 else
-  warn "CNEInstance did not reach Available within ${BNK_WAIT_TIMEOUT:-900}s"
+  warn "CNEInstance did not become ready within ${BNK_WAIT_TIMEOUT:-900}s"
   kubectl get cneinstance f5-bnk-instance -n "$NS_BNK" \
     -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.message}{"\n"}{end}' 2>/dev/null \
-    | grep -v '=True' | sed 's/^/        /'
-  # Show any workload that has not reached its desired replica count, which is usually the cause.
+    | grep -v '=True' | sed 's/^/        /' || true
+  # a workload short of its desired replicas is usually the cause
   kubectl get sts,deploy -n "$NS_BNK" -o json 2>/dev/null | python3 -c '
 import json,sys
-d=json.load(sys.stdin)
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(0)
 for i in d.get("items",[]):
     want=i["spec"].get("replicas",1); got=i.get("status",{}).get("readyReplicas",0)
-    if got!=want:
-        print(f"        {i[\"kind\"]}/{i[\"metadata\"][\"name\"]}: {got}/{want} ready")
-' 2>/dev/null || true
+    if got!=want: print(f"        {i[\"kind\"]}/{i[\"metadata\"][\"name\"]}: {got}/{want} ready")
+' || true
 fi
