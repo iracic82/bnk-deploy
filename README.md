@@ -1,11 +1,105 @@
 # bnk-deploy
 
-Automated deployment for F5 BIG-IP Next for Kubernetes, driven from git.
+**Install and operate F5 BIG-IP Next for Kubernetes across a fleet of clusters, from git.**
 
-The official install guide is a long sequence of copy and paste steps with manual blocks in the
-middle. This turns it into something you run, review in a pull request, and repeat.
+Built for teams running AI infrastructure at more than one site. If you operate GPU capacity across
+several clusters, regions or tenants, installing BNK by following a procedure on each one does not
+scale and does not stay consistent. This makes it declarative, repeatable and reviewable.
 
-Two paths. Pick by what you already have.
+```mermaid
+flowchart LR
+    G["<b>git</b><br/>clusters/*.yaml<br/>environments · profiles<br/>pinned versions"]
+    W["<b>GitHub Actions</b><br/>plan · approve · apply"]
+    R["<b>runners</b><br/>beside each cluster<br/>or one hub"]
+    C1["cluster<br/>eu-west"]
+    C2["cluster<br/>us-east"]
+    C3["cluster<br/>ap-south"]
+    G --> W --> R
+    R --> C1
+    R --> C2
+    R --> C3
+    style G stroke-width:2px
+    style R stroke-width:2px
+```
+
+---
+
+## What you get
+
+**One command per cluster, or one run for the whole fleet.** `./install.sh --env production
+--profile dpu` for a single cluster, or a dispatch that fans out across everything matching a
+selector.
+
+**Both BNK deployment models.** Host mode where TMM runs as a software pod, and DPU mode where it
+runs on NVIDIA BlueField with DOCA offload. Every environment supports either, because a production
+site may be software only or fitted with BlueField.
+
+**Bare metal from nothing, too.** If you do not have a cluster yet, the DPU path wraps F5's own
+`dpubnkctl` to flash BlueField cards, provision nodes, build the cluster and install BNK.
+
+**Safe by default.** Every apply plans first. Applying across more than one cluster needs an
+explicit opt in. Production makes every preflight warning fatal. Nothing installs on a merge.
+
+**It knows the traps.** Five failure modes that are not in the official install guide are handled
+before they bite you. They are listed further down, with what each one costs if you hit it blind.
+
+**Pinned and reproducible.** Every component version is fixed in one file, including two that F5's
+procedure has you discover at install time.
+
+---
+
+## Requirements
+
+| | |
+|---|---|
+| Kubernetes | 1.30, the version BNK 2.3 is qualified against |
+| CNI | **Calico** is the primary supported CNI. Flannel, VPC-CNI on EKS, OCI-CNI on Oracle and OVN-Kubernetes on OpenShift are recognised. Cilium is not supported |
+| Nodes running TMM | hugepages allocated, because TMM uses DPDK |
+| Storage | a default StorageClass |
+| Access | outbound to `repo.f5.com`, plus `kubectl`, `helm` and `openssl` |
+| From F5 | a registry credential and a licence token |
+
+DPU mode additionally needs BlueField-3 cards, the SR-IOV device plugin advertising scalable
+functions, and the node level work done. If that is not done, use the bare metal path instead.
+
+---
+
+## Quick start, one cluster
+
+```bash
+git clone https://github.com/iracic82/bnk-deploy.git && cd bnk-deploy
+
+export FAR_PULL_JSON=/path/to/cne_pull_64.json      # your F5 registry credential
+export BNK_LICENSE_JWT='eyJ...'                     # your F5 licence token
+
+./install.sh --env lab --profile host --dry-run     # validate, change nothing
+./install.sh --env lab --profile host               # install
+./install.sh --env lab --phase 70                   # verify only
+./uninstall.sh                                      # remove BNK, leave cert-manager and Calico
+```
+
+Re-running is safe. Every phase detects what already exists, so a second run is a no op rather
+than a second install.
+
+### The eight phases
+
+Each can be run alone with `--phase NN`, which is how you debug a partial install without
+starting over.
+
+| | |
+|---|---|
+| 00 preflight | Tooling, cluster reachability, Kubernetes version, CNI identification, Multus CRD, StorageClass, hugepages. Fails fast |
+| 10 prereqs | Multus, cert-manager, and the three object certificate authority chain |
+| 20 registry | Registry login, namespaces, image pull secrets |
+| 30 flo | The F5 Lifecycle Operator, which reconciles everything after it |
+| 40 certs | CWC and OpenTelemetry certificates |
+| 50 cneinstance | The CNEInstance, then waits for the stack |
+| 60 licence | Applies the licence and reports whether it activates |
+| 70 verify | Assertions, non zero exit on failure |
+
+---
+
+## Two paths in
 
 ```mermaid
 flowchart LR
@@ -17,128 +111,46 @@ flowchart LR
     style B stroke-width:2px
 ```
 
----
-
-## How to use it
-
-### 1. Try it locally first
-
-You need a Calico cluster, `kubectl`, `helm`, and the F5 registry credential `cne_pull_64.json`.
-
-```bash
-git clone https://github.com/iracic82/bnk-deploy.git && cd bnk-deploy
-
-export FAR_PULL_JSON=/path/to/cne_pull_64.json
-
-./install.sh --list-env                        # lab demo staging production
-./install.sh --list-profile                    # host dpu
-
-./install.sh --env lab --profile host --dry-run --skip-license   # change nothing
-./install.sh --env lab --profile host --skip-license             # actually install
-./install.sh --env lab --phase 70                                # just verify
-./uninstall.sh                                                   # remove BNK
-```
-
-Re-running is safe. Every phase detects what already exists.
-
-### 2. Put a runner on the host
-
-This is the part that makes it CI/CD rather than a script someone remembers to run. The runner
-lives **on the host that owns the cluster**, so no kubeconfig is ever stored as a repository
-secret and nothing has to reach into your network from outside.
-
-```bash
-# get a short lived registration token
-GH_RUNNER_TOKEN=$(gh api -X POST repos/iracic82/bnk-deploy/actions/runners/registration-token -q .token)
-
-sudo -E ./bootstrap/install-runner.sh \
-  --repo iracic82/bnk-deploy \
-  --label tokyo-dpu-1 \
-  --env production \
-  --profile dpu
-```
-
-It checks the host can actually reach a cluster before registering, installs helm, `sshpass` and
-`yq` for the DPU path, and installs itself as a systemd service so it survives reboots.
-
-Then add the host to [`fleet/runners.yaml`](fleet/runners.yaml) so the fleet is documented in git,
-and copy [`bootstrap/site.yml`](bootstrap/site.yml) per site if you want the host facts reviewable.
-
-### 3. Create the GitHub environments
-
-One per environment name, under Settings then Environments:
-
-| Environment | Reviewers | Secrets |
-|---|---|---|
-| `bnk-lab` | none | `FAR_PULL_B64` |
-| `bnk-demo` | none | `FAR_PULL_B64`, `BNK_LICENSE_JWT` |
-| `bnk-staging` | required | `FAR_PULL_B64`, `BNK_LICENSE_JWT` |
-| `bnk-production` | required | `FAR_PULL_B64`, `BNK_LICENSE_JWT` |
-
-`FAR_PULL_B64` is the contents of `cne_pull_64.json` pasted as is, it is already base64.
-There is deliberately no `KUBECONFIG` secret. The runner already has cluster access.
-
-### 4. Day to day
-
-```mermaid
-flowchart TB
-    subgraph GH["GitHub"]
-        direction TB
-        PR["Pull request"]
-        VAL["<b>validate</b><br/>hosted runner<br/>lint · renders all 8 combos"]
-        E2E["<b>e2e-kind</b><br/>hosted runner<br/>throwaway cluster, install twice"]
-        DISP["<b>deploy</b><br/>manual dispatch"]
-        APR{"Environment<br/>approval"}
-    end
-
-    subgraph SITE["Your network, nothing inbound"]
-        direction TB
-        RUN["<b>self hosted runner</b><br/>on the cluster host"]
-        K8S["Kubernetes cluster<br/>+ BNK"]
-    end
-
-    PR --> VAL
-    PR --> E2E
-    PR -->|plan| RUN
-    RUN -->|"server side dry run"| K8S
-    RUN -.->|"plan posted as<br/>a PR comment"| PR
-    DISP --> APR
-    APR -->|"staging, production<br/>need a reviewer"| RUN
-    RUN -->|apply| K8S
-
-    style RUN stroke-width:2px
-    style K8S stroke-width:2px
-```
-
-The runner lives beside the cluster, so nothing reaches into your network and no kubeconfig is
-ever a repository secret.
-
-
-| You do | What happens |
-|---|---|
-| Open a pull request | `validate` lints and renders every environment and profile combination. `plan` runs a server side dry run on the target host and **posts the result as a PR comment**. |
-| Merge | `validate` and `e2e-kind` run. Nothing is applied to a real cluster by a merge. |
-| Run **deploy** | Manual dispatch. Pick runner, environment, profile. A plan runs first in the same job, then apply. Staging and production wait for a reviewer. |
-| Nothing | `cluster-check` runs daily against the fleet as a drift check. |
-
-Installing is never triggered by a merge. That is deliberate.
+The bare metal path wraps F5's `dpubnkctl`. Its published procedure leaves four manual blocks in
+the middle, configuring OVS bridges on the DPU, applying netplan on the host, and setting up
+kubeconfig. Those become the post-scripts the tool already hooks, so the whole build is one
+command. Every site specific value, interface names, addresses, bridge names and DPU count, lives
+in `dpubnkctl/env/<site>.env` rather than in the scripts.
 
 ---
 
 ## Many clusters
 
-Add a file to [`clusters/`](clusters/) and the cluster is in the fleet. That is the whole
-onboarding step, so it happens in a pull request rather than in someone's head.
+Add a file to `clusters/` and the cluster is in the fleet. That is the whole onboarding step, so it
+happens in a pull request rather than in someone's head.
+
+```yaml
+# clusters/eu-west-prod.yaml
+name: eu-west-prod
+description: Production inference cluster, Frankfurt, BlueField fitted.
+
+runner: beside                 # beside | hub
+runner_label: eu-west-prod-1
+
+environment: production        # lab | demo | staging | production
+profile: dpu                   # host | dpu
+
+kube_context: eu-west-prod
+storage_class: nfs
+pod_cidr: 192.168.0.0/16
+
+enabled: true
+```
 
 ```mermaid
 flowchart TB
     INV["<b>clusters/*.yaml</b><br/>the inventory"]
     PLAN["<b>plan</b><br/>selector to matrix<br/>all · env:production · profile:dpu<br/>name:one · runner:hub"]
     GATE{"apply to more<br/>than one cluster?"}
-    DEP["<b>deploy.yml</b><br/>one job per cluster<br/>max-parallel 3, fail-fast off"]
+    DEP["<b>deploy</b><br/>one job per cluster<br/>max-parallel 3, fail-fast off"]
 
     INV --> PLAN --> GATE
-    GATE -->|"no, or the repo variable<br/>BNK_FLEET_APPLY_ENABLED is true"| DEP
+    GATE -->|"no, or fleet apply<br/>explicitly enabled"| DEP
     GATE -->|"yes and not enabled"| STOP["refused, plan only"]
 
     DEP --> R1["runner <b>beside</b><br/>on the cluster host<br/>no kubeconfig anywhere"]
@@ -151,62 +163,66 @@ flowchart TB
     style STOP stroke-dasharray: 5 4
 ```
 
-### Two runner topologies, choose per cluster
+Then from the Actions tab, run **dispatch**:
+
+```
+select: all              action: plan     # dry run every enabled cluster, always safe
+select: env:production   action: apply    # needs BNK_FLEET_APPLY_ENABLED
+select: name:eu-west-prod action: apply   # one cluster, no gate needed
+select: profile:dpu      action: verify   # health check every DPU cluster
+```
+
+An apply touching more than one cluster is refused unless the repository variable
+`BNK_FLEET_APPLY_ENABLED` is `true`, so the worst an accidental run can do is plan. One cluster
+failing never stops the rest of the fleet, and parallelism is capped so a fleet run does not
+saturate your runners or the registry.
+
+### Where the runners go
 
 **`runner: beside`** puts a self hosted runner on the cluster's own host. It already has kubectl
-access, so no kubeconfig is stored anywhere and nothing reaches inbound. Right for production and
-for anything behind a firewall.
+access, so no kubeconfig is stored anywhere and **nothing reaches inbound into your network**. This
+is the right choice for production, for air gapped sites, and for anything behind a firewall.
 
-**`runner: hub`** uses one runner holding a single merged kubeconfig with a context per cluster,
-selected with `--context`. Fewer runners to look after, and it reaches clusters you cannot put a
-runner on. The trade is that the hub can reach every cluster in its kubeconfig, so treat it
-accordingly. Dynamic secret names are not possible in Actions, which is why it is one merged file
-rather than a secret per cluster.
+**`runner: hub`** uses one runner holding a single merged kubeconfig with a context per cluster.
+Fewer runners to maintain, and it reaches clusters that cannot host one. The trade is that the hub
+can reach every cluster in its kubeconfig, so it deserves the same protection as a jump host.
 
-Mix both in one fleet. The dispatcher reads `runner` from each file and addresses accordingly.
+Mix both in one fleet. Register a host with:
 
-### Running it
+```bash
+GH_RUNNER_TOKEN=$(gh api -X POST repos/OWNER/REPO/actions/runners/registration-token -q .token)
 
-```
-Actions -> dispatch -> Run workflow
-  select: all              action: plan     # always safe, dry run on every selected cluster
-  select: env:production   action: apply    # needs BNK_FLEET_APPLY_ENABLED
-  select: name:tokyo-dpu   action: apply    # single cluster, no gate needed
-  select: all              action: verify   # phase 70 across the fleet
+sudo -E ./bootstrap/install-runner.sh \
+  --repo OWNER/REPO --label eu-west-prod-1 --env production --profile dpu
 ```
 
-`plan` is a server side dry run and changes nothing. An `apply` touching more than one cluster is
-refused unless the repository variable `BNK_FLEET_APPLY_ENABLED` is `true`, so the worst an
-accidental run can do is plan. Single cluster applies do not need the gate.
-
-There is deliberately **no schedule** on `dispatch`. A traffic generator can sensibly run on a
-cron. Installing a data plane cannot, so every apply is a human pressing the button. The only
-scheduled thing here is `cluster-check`, which verifies and never changes.
-
-## Workflows
-
-| Workflow | Trigger | Runs on | Does |
-|---|---|---|---|
-| `validate` | PR, push | hosted | shellcheck, pinned version check, renders all 8 env and profile combinations, scans for committed credentials |
-| `plan` | PR, dispatch | **self hosted** | server side dry run, comments the plan on the PR |
-| `deploy` | dispatch | **self hosted** | plan then apply, or uninstall. Concurrency locked per runner |
-| `cluster-check` | dispatch, daily | **self hosted** | phase 70 verification only, drift detection |
-| `e2e-kind` | PR, push | hosted | throwaway 1.30 cluster, install, then install again to prove idempotency |
-| `dpubnkctl-deploy` | dispatch | **self hosted** jumphost | bare metal DPU build through F5's tool |
+It refuses to register a host that cannot reach a cluster, installs what the workflows need, and
+runs as a systemd service so it survives reboots.
 
 ---
 
-## Environments and profiles are independent
+## Environments and profiles
 
-The **environment** decides policy. The **profile** decides the deployment model. Every
-environment runs either, because a production site may be software only or fitted with BlueField.
+Two independent axes. The **environment** sets policy. The **profile** sets the deployment model.
+Any environment runs either profile.
 
-```bash
-./install.sh --env production --profile host    # software only production site
-./install.sh --env production --profile dpu     # BlueField production site
-```
+| | lab | demo | staging | production |
+|---|---|---|---|---|
+| Default profile | host | host | dpu | dpu |
+| Deployment size | Small | Medium | Large | Large |
+| Storage class | standard | standard | nfs | nfs |
+| Core collection | off | off | on | on |
+| Licence required | no | yes | yes | yes |
+| Warnings fatal | no | no | no | **yes** |
+| Wait timeout | 600s | 900s | 1800s | 2400s |
 
-Configuration layers, later wins:
+| | host | dpu |
+|---|---|---|
+| `dpu.enabled` | false | true |
+| TMM MTU | 1500 | 9000 |
+| Network attachments | none | `sf-external`, `sf-internal` |
+| Dynamic routing | off | on |
+| Needs SR-IOV | no | yes |
 
 ```mermaid
 flowchart LR
@@ -219,17 +235,19 @@ flowchart LR
     style R stroke-width:2px
 ```
 
-Full matrix in [INSTALLER.md](INSTALLER.md).
+Later layers win. The combination file exists for cases like a production site on host mode, where
+jumbo frames are a DPU fabric concern and the MTU should stay at 1500 rather than inherit 9000.
 
-Two guardrails. `BNK_REQUIRE_LICENSE` makes `--skip-license` an error outside lab, so nobody ships
-an unlicensed demo. `BNK_STRICT_PREFLIGHT` makes every warning fatal in production, so a missing
+Two guardrails are worth knowing. Outside lab, `--skip-license` is an error, so nobody ships an
+unlicensed demo by accident. In production every preflight warning is fatal, so a missing
 StorageClass stops the run instead of producing a cluster that half works.
 
 ---
 
-## The two gates that are not obvious
+## The five traps this handles for you
 
-Both were found by running it. Neither is in the install guide.
+All were found by running the install, not by reading about it. Each one costs real time if you
+meet it without warning.
 
 ```mermaid
 flowchart TB
@@ -244,111 +262,94 @@ flowchart TB
     FLO --> CNE
     CNE --> CP
     CNE --> TMM
-    LIC -->|"f5-cne-controller logs<br/>'License is not enabled..<br/>skip Resource controllers'"| TMM
+    LIC -->|"the controller skips its<br/>resource controllers<br/>without a licence"| TMM
 
     style NAD stroke-width:2px
     style LIC stroke-width:2px
     style TMM stroke-dasharray: 5 4
 ```
 
-So an unlicensed install brings up everything in the control plane box and nothing in the data
-plane box, on any cluster, however it is configured. That is by design rather than a fault.
+**1. The operator will not start without the Multus CRD.** Even for a host install that uses no
+network attachments, the Lifecycle Operator crash loops on `if kind is a CRD, it should be
+installed before calling Start`. Nothing in the install guide mentions this, and the error does not
+point at Multus. Phase 10 installs Multus before phase 30 installs the operator, and phase 30
+restarts the operator if it finds it looping, so the ordering is self healing.
 
-## What else this knows that the install guide does not
+**2. Two component versions are discovered, not published.** The procedure has you grep the
+Lifecycle Operator and cert generation versions out of a release manifest at install time, which
+makes every run potentially different. They are resolved and pinned in `versions.env`.
 
-All five were found by running it, not by reading.
+**3. The certificate authority CommonName must differ from the leaf CommonNames.** If it does not,
+the licensing component crash loops on an x509 error that gives no hint why. The chain is built
+correctly and the result is asserted to actually be a CA rather than assumed.
 
-**FLO will not start without the Multus `NetworkAttachmentDefinition` CRD.** Even for a host
-install that uses no attachments. It crash loops on `if kind is a CRD, it should be installed
-before calling Start`. Phase 10 installs Multus before phase 30 installs FLO, and phase 30 bounces
-FLO if it finds it restarting.
+**4. Multus runs out of memory under BNK.** BNK creates enough pods to flood it with CNI requests
+and the default limit is not enough. Raised up front rather than left as a troubleshooting step
+after pods fail to start.
 
-**Two versions are discovered, not published.** The guide has you grep the FLO and cert-gen
-versions out of the release manifest at install time, which makes runs irreproducible. They are
-pinned as `v2.21.13-0.0.28` and `0.9.3` from release manifest `2.3.0-3.2598.3-0.0.170`.
-
-**The CA CommonName must differ from the leaf CommonNames** or CWC crash loops on an x509 error
-that explains nothing. Phase 10 asserts `CA:TRUE` rather than assuming it.
-
-**Multus OOMKills under BNK's CNI request volume** at its default memory limit. Raised to 512Mi up
-front rather than left as a troubleshooting step.
-
-**Hugepages are mandatory, not tunable.** TMM requests `hugepages-2Mi` and the operator keeps that
-request even when you override `advanced.tmm.resources` to remove it. Tested by patching the
-CNEInstance and watching the rendered `f5tmm` keep it.
+**5. An unlicensed install has no data plane, by design.** Without a licence the controller logs
+`License is not enabled.. skip Resource controllers` and never creates TMM. The whole control plane
+comes up and the data plane does not. Verification reports that as expected rather than as a fault,
+so you are not left hunting a problem that is not there.
 
 ---
 
-## Verified, and what is not
+## Workflows
 
-Run against a real Kubernetes 1.30 cluster with Calico, host profile, unlicensed.
+| Workflow | Trigger | Runs on | Does |
+|---|---|---|---|
+| `validate` | PR, push | hosted | shellcheck, actionlint, contract tests, renders every environment and profile combination, refuses floating versions, scans for committed credentials |
+| `plan` | PR, dispatch | self hosted | server side dry run against the real cluster, posts the plan as a PR comment |
+| `deploy` | dispatch | self hosted | plans then applies, or verifies, or uninstalls. Locked per cluster so two runs cannot race |
+| `dispatch` | dispatch | hosted then self hosted | fleet wide, selector to matrix, fans out to `deploy` |
+| `cluster-check` | dispatch, daily | self hosted | verification only, drift detection |
+| `e2e-kind` | PR, push | hosted | throwaway 1.30 cluster with Calico, installs twice to prove idempotency |
+| `dpubnkctl-deploy` | dispatch | jumphost | bare metal DPU build |
 
-| | |
-|---|---|
-| Preflight | passes, correctly warns on missing hugepages |
-| Multus, cert-manager, CA chain | pass, `CA:TRUE` asserted |
-| FLO `v2.21.13-0.0.28` | running, 22 F5 CRDs registered |
-| CNEInstance | applied, 9 of 9 pods in `f5-bnk`, 10 in `f5-cne-core` |
-| Second run | idempotent, every phase detected existing state |
-| All 8 env and profile combinations | validate server side, rendered objects differ correctly |
-| **Three node cluster**, 1 control plane + 2 workers | full install clean. Calico and Multus spread as DaemonSets, `f5-dssm-db` and `f5-dssm-sentinel` distributed one replica per node, 13 pods in `f5-cne-core` and 9 in `f5-bnk`, every container ready |
-
-**TMM cannot be verified without a licence, and that is by design.** `f5-cne-controller` logs
-`License is not enabled.. skip Resource controllers` and never creates the TMM workload. So an
-unlicensed install correctly brings up the whole control plane and deliberately withholds the data
-plane. `--skip-license` can never produce a running TMM, on any cluster, however it is configured.
-Phase 70 knows this and reports it as expected rather than as a failure.
-
-That means a licensed install is the one remaining untested path, including everything downstream
-of `License` reaching `Active`. The eval token available during development had expired.
-
-Two other things were ruled out along the way, worth recording so nobody re-chases them. On a
-single node cluster `f5-spk-csrc`'s `f5-fluentbit` sidecar crash loops on a plugin load fault, and
-it does not on three nodes, so that was a single node artefact. And allocating hugepages is
-necessary but not sufficient: the node reports 4Gi allocatable and TMM still does not appear,
-because the licence gate sits in front of scheduling entirely.
+A merge never applies to a cluster. Installing is always a deliberate act.
 
 ---
-
-## Testing on a multi node cluster
-
-`e2e-kind` runs a single node cluster, which is enough for regression but hides node selection,
-taint behaviour and DaemonSet spread. For a multi node kind cluster the host needs two sysctls
-raised first, because each node container runs its own kubelet, containerd and CNI agents and the
-defaults are too low. This is a kind requirement, not a BNK one.
-
-```bash
-sudo sysctl -w fs.inotify.max_user_instances=512
-sudo sysctl -w fs.inotify.max_user_watches=524288
-sudo sysctl -w kernel.keys.maxkeys=500000
-
-# persist
-sudo tee /etc/sysctl.d/99-kind.conf <<EOF
-fs.inotify.max_user_instances = 512
-fs.inotify.max_user_watches = 524288
-kernel.keys.maxkeys = 500000
-EOF
-```
-
-Without them `kind create cluster` fails during kubeadm on the second node with an error that does
-not mention inotify.
 
 ## Secrets
 
-Never committed. `.gitignore` blocks `*.jwt`, `cne_pull_64.json`, `f5-far-auth-key.tgz` and
-`kubeconfig`, and `validate` fails the build if anything credential shaped appears.
+Nothing sensitive is committed, and CI fails the build if anything credential shaped appears.
 
-| Secret | Path | For |
+| Secret | Used by | What it is |
 |---|---|---|
-| `cne_pull_64.json` | `install.sh` | Registry pull. A base64 wrapped GCP service account for the Artifact Registry behind `repo.f5.com` |
-| `f5-far-auth-key.tgz` | `dpubnkctl/` | FAR auth, the format F5's tool expects |
-| Licence JWT | both | `operationMode: connected` validates against F5 live, so a stale token fails at apply time with a fully built cluster |
+| `FAR_PULL_B64` | all install paths | Your F5 registry credential, the contents of `cne_pull_64.json` |
+| `BNK_LICENSE_JWT` | licensed installs | Your F5 licence token |
+| `HUB_KUBECONFIGS` | hub runners only | One merged kubeconfig with a context per cluster |
+| `FAR_AUTH_KEY_B64` | bare metal path | The FAR auth key, the format `dpubnkctl` expects |
+
+Store them per GitHub Environment so staging and production credentials are separate and gated by
+reviewers. Runners that sit beside their cluster need **no kubeconfig secret at all**.
 
 ---
 
-## Node provisioning is out of scope for install.sh
+## Validation status
 
-DOCA installs, BlueField flashing, scalable functions, OVS bridges, GRUB hugepages and `kubeadm`
-are imperative, need reboots, and are not Kubernetes. Either use `./dpubnkctl/run.sh`, which wraps
-F5's tool and does all of it, or put it in Ansible. Do not make a cluster reconciler own a file on
-a node.
+Honest about what has and has not been proven, because a deployment tool that overstates its
+testing is worse than one that says nothing.
+
+**Verified** on a three node Kubernetes 1.30 cluster with Calico. Full install clean end to end,
+the operator running with 22 custom resource definitions registered, the control plane distributed
+across all three nodes with every container ready, and a second run a complete no op. All eight
+environment and profile combinations validate server side and render correctly differing objects.
+Both runner topologies exercised, including a context that does not exist failing rather than
+silently operating on the wrong cluster.
+
+**Not yet verified**, and this is the honest gap: a **licensed** install. Everything downstream of
+the licence activating, TMM included, is unexercised. The licence gate sits in front of the data
+plane entirely, so an unlicensed run cannot reach it.
+
+**DPU mode** is validated as far as rendering and preflight. The node level work, flashing and
+scalable functions, needs real BlueField hardware to prove.
+
+---
+
+## Scope
+
+This installs and operates BNK on Kubernetes. It does not do node provisioning, meaning DOCA
+installs, BlueField flashing, OVS bridges, kernel parameters and `kubeadm`, because those are
+imperative, need reboots and are not Kubernetes. Use the bare metal path for that, or your own
+configuration management. A cluster reconciler should not own a file on a node.
