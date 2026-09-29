@@ -78,13 +78,12 @@ else
   kubectl get cneinstance f5-bnk-instance -n "$NS_BNK" \
     -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.message}{"\n"}{end}' 2>/dev/null \
     | grep -v '=True' | sed 's/^/        /' || true
-  # a workload short of its desired replicas is usually the cause
-  kubectl get sts,deploy -n "$NS_BNK" -o json 2>/dev/null | python3 -c '
-import json,sys
-try: d=json.load(sys.stdin)
-except Exception: sys.exit(0)
-for i in d.get("items",[]):
-    want=i["spec"].get("replicas",1); got=i.get("status",{}).get("readyReplicas",0)
-    if got!=want: print(f"        {i[\"kind\"]}/{i[\"metadata\"][\"name\"]}: {got}/{want} ready")
-' || true
+  # A workload short of its desired replicas is usually the cause. Printed with awk rather than
+  # python, because nesting escaped quotes inside a heredoc inside a shell string is how the
+  # previous version of this became a SyntaxError that only surfaced when it finally ran.
+  kubectl get sts,deploy -n "$NS_BNK" \
+    -o 'custom-columns=KIND:.kind,NAME:.metadata.name,WANT:.spec.replicas,READY:.status.readyReplicas' \
+    --no-headers 2>/dev/null \
+    | awk '{ ready = ($4 == "<none>" ? 0 : $4); if (ready != $3) printf "        %s/%s: %s/%s ready\n", $1, $2, ready, $3 }' \
+    || true
 fi
