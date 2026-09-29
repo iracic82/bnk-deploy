@@ -1,0 +1,94 @@
+name: apply
+
+# The merge side of the flow. When a change to a cluster file lands on main, that cluster is
+# installed or updated. Only the clusters the merge touched, so one cluster's change never
+# disturbs another.
+#
+# The safety is GitHub Environments rather than a manual step. bnk-staging and bnk-production
+# should have required reviewers, so a merge queues the job and it waits for a human. lab and demo
+# can proceed unattended. Configure that once in Settings then Environments.
+#
+# Every job plans before it applies, so the run log shows what it was about to do even when it is
+# unattended.
+
+on:
+  push:
+    branches: [main]
+    paths: ['clusters/**']
+  workflow_dispatch:
+    inputs:
+      select:
+        description: "Which clusters. all | env:production | profile:dpu | name:<cluster>"
+        required: true
+        default: "all"
+
+permissions:
+  contents: read
+
+jobs:
+  which:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet pyyaml
+
+      - name: which cluster files did this merge touch
+        if: github.event_name == 'push'
+        run: |
+          # before is all zeroes on a branch's first push, in which case compare against the parent
+          base="${{ github.event.before }}"
+          case "$base" in 0000000*) base="${{ github.sha }}^" ;; esac
+          git diff --name-only "$base" "${{ github.sha }}" > "$RUNNER_TEMP/changed.txt" \
+            || git show --name-only --pretty=format: "${{ github.sha }}" > "$RUNNER_TEMP/changed.txt"
+          echo "changed:"; sed 's/^/  /' "$RUNNER_TEMP/changed.txt"
+          {
+            echo 'CHANGED_FILES<<EOF'
+            cat "$RUNNER_TEMP/changed.txt"
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
+
+      - id: plan
+        env:
+          SELECT: ${{ github.event_name == 'push' && 'changed' || inputs.select }}
+        run: python3 .github/scripts/plan_clusters.py
+
+      - name: summary
+        env:
+          COUNT: ${{ steps.plan.outputs.count }}
+        run: |
+          {
+            echo "### Applying to $COUNT cluster(s)"
+            echo
+            echo "Staging and production wait for a reviewer if their GitHub Environment requires one."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    needs: which
+    if: needs.which.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include: ${{ fromJSON(needs.which.outputs.matrix) }}
+    uses: ./.github/workflows/deploy.yml
+    with:
+      cluster_name: ${{ matrix.name }}
+      runner_label: ${{ matrix.runner_label }}
+      environment: ${{ matrix.environment }}
+      profile: ${{ matrix.profile }}
+      kube_context: ${{ matrix.kube_context }}
+      storage_class: ${{ matrix.storage_class }}
+      pod_cidr: ${{ matrix.pod_cidr }}
+      action: apply
+    secrets:
+      FAR_PULL_B64: ${{ secrets.FAR_PULL_B64 }}
+      BNK_LICENSE_JWT: ${{ secrets.BNK_LICENSE_JWT }}
+      HUB_KUBECONFIGS: ${{ secrets.HUB_KUBECONFIGS }}

@@ -48,19 +48,100 @@ procedure has you discover at install time.
 
 ---
 
-## Requirements
+## Before you start
 
-| | |
-|---|---|
-| Kubernetes | 1.30, the version BNK 2.3 is qualified against |
-| CNI | **Calico** is the primary supported CNI. Flannel, VPC-CNI on EKS, OCI-CNI on Oracle and OVN-Kubernetes on OpenShift are recognised. Cilium is not supported |
-| Nodes running TMM | hugepages allocated, because TMM uses DPDK |
-| Storage | a default StorageClass |
-| Access | outbound to `repo.f5.com`, plus `kubectl`, `helm` and `openssl` |
-| From F5 | a registry credential and a licence token |
+A checklist for the platform team. Work top to bottom and you will not get stopped halfway.
 
-DPU mode additionally needs BlueField-3 cards, the SR-IOV device plugin advertising scalable
-functions, and the node level work done. If that is not done, use the bare metal path instead.
+### 1. Get two things from F5
+
+| | What it is | Where it goes |
+|---|---|---|
+| `cne_pull_64.json` | Registry credential for `repo.f5.com`. A base64 wrapped service account key | `FAR_PULL_JSON` locally, `FAR_PULL_B64` as a GitHub secret |
+| Licence token | A JWT. Ask for the deployment mode you need, connected or disconnected | `BNK_LICENSE_JWT` |
+
+Check the licence is **current** before you plan any work around it. It is validated against F5 at
+apply time, not at install time, so an expired token hands you a fully built control plane with no
+data plane and no obvious reason why.
+
+### 2. Make sure each cluster qualifies
+
+| | Requirement | Why it matters |
+|---|---|---|
+| Kubernetes | **1.30** | The version BNK 2.3 is qualified against |
+| CNI | **Calico** | The primary supported CNI. Flannel, VPC-CNI on EKS, OCI-CNI on Oracle and OVN-Kubernetes on OpenShift are recognised. **Cilium is not supported** and the operator will refuse it |
+| Hugepages | allocated on every node that will run TMM | TMM uses DPDK. Without them TMM is never scheduled, and no override removes the requirement |
+| Storage | a default StorageClass | The datastore components need persistent volumes |
+| Egress | outbound to `repo.f5.com` | 81 component images are pulled from there |
+| Tooling | `kubectl`, `helm`, `openssl` | On whatever runs the installer |
+
+Allocating hugepages, which needs root on the node:
+
+```bash
+sudo sysctl -w vm.nr_hugepages=2048                                   # 4Gi, takes effect now
+echo 'vm.nr_hugepages = 2048' | sudo tee /etc/sysctl.d/90-bnk.conf    # persist it
+```
+
+If a node was already running when you set this, kubelet has to rediscover the capacity before the
+scheduler will believe it. Restart kubelet on that node, then confirm with
+`kubectl get node <node> -o jsonpath='{.status.allocatable.hugepages-2Mi}'`.
+
+### 3. Decide DPU or host per cluster
+
+**Host mode** runs TMM as a software pod on host CPU. No BlueField, no scalable functions, no
+SR-IOV, no Multus attachments. Anything that meets the table above can run it.
+
+**DPU mode** runs TMM on NVIDIA BlueField-3 with DOCA offload. It additionally needs the cards
+fitted, the SR-IOV device plugin advertising scalable functions, OVS bridges configured on the DPU
+and hugepages on it. If that node level work is not done, use the bare metal path which does all of
+it for you.
+
+You do not have to choose the same mode everywhere. Any environment runs either.
+
+### 4. Decide where the runners go
+
+One runner per cluster on its own host means **nothing reaches inbound into your network** and no
+kubeconfig is stored anywhere. One shared hub runner holding a merged kubeconfig means fewer runners
+to maintain but a host that can reach every cluster. Both are supported and you can mix them.
+
+### 5. Set it up once, then work through pull requests
+
+```
+register a runner  ->  create the GitHub environments  ->  open a PR adding your cluster
+```
+
+After that, nobody runs the installer by hand. A pull request is how a cluster is added, changed or
+rebuilt.
+
+```mermaid
+flowchart LR
+    PR["<b>pull request</b><br/>add or edit<br/>clusters/&lt;name&gt;.yaml"]
+    P["<b>plan</b><br/>dry run on that<br/>cluster's own runner"]
+    REV["plan posted as a<br/>PR comment, reviewed<br/>beside the diff"]
+    M["<b>merge</b>"]
+    A["<b>apply</b><br/>only the clusters<br/>the merge touched"]
+    G{"environment needs<br/>a reviewer?"}
+    W["waits for approval"]
+    C["cluster installed<br/>or updated"]
+
+    PR --> P --> REV --> M --> A --> G
+    G -->|"lab, demo"| C
+    G -->|"staging, production"| W --> C
+
+    style PR stroke-width:2px
+    style C stroke-width:2px
+```
+
+Three properties worth knowing.
+
+Only the clusters a change **touched** are acted on, so editing one cluster never disturbs another,
+and editing the installer itself triggers no installs at all.
+
+Approval is a **GitHub Environment setting**, not a manual step. A merge affecting a production
+cluster queues the job and waits for a human, while lab and demo proceed unattended. You configure
+that once.
+
+A **version bump installs nothing.** Changing `versions.env` does not touch `clusters/`, so nothing
+fans out by surprise. Roll it out deliberately with `dispatch` when you are ready.
 
 ---
 
@@ -302,14 +383,17 @@ so you are not left hunting a problem that is not there.
 | Workflow | Trigger | Runs on | Does |
 |---|---|---|---|
 | `validate` | PR, push | hosted | shellcheck, actionlint, contract tests, renders every environment and profile combination, refuses floating versions, scans for committed credentials |
-| `plan` | PR, dispatch | self hosted | server side dry run against the real cluster, posts the plan as a PR comment |
-| `deploy` | dispatch | self hosted | plans then applies, or verifies, or uninstalls. Locked per cluster so two runs cannot race |
-| `dispatch` | dispatch | hosted then self hosted | fleet wide, selector to matrix, fans out to `deploy` |
+| `plan` | **PR** touching `clusters/**` | self hosted | dry runs each touched cluster, posts the plan as a PR comment |
+| `apply` | **merge** to main touching `clusters/**` | self hosted | installs or updates each touched cluster. Approval comes from the GitHub Environment |
+| `deploy` | called by `apply` and `dispatch` | self hosted | the single implementation. Plans then applies, or verifies, or uninstalls. Locked per cluster so two runs cannot race |
+| `dispatch` | manual | hosted then self hosted | deliberate fleet wide work, such as rolling out a version bump. Applying to more than one cluster needs `BNK_FLEET_APPLY_ENABLED` |
 | `cluster-check` | dispatch, daily | self hosted | verification only, drift detection |
 | `e2e-kind` | PR, push | hosted | throwaway 1.30 cluster with Calico, installs twice to prove idempotency |
 | `dpubnkctl-deploy` | dispatch | jumphost | bare metal DPU build |
 
-A merge never applies to a cluster. Installing is always a deliberate act.
+`apply` and `dispatch` both call `deploy`, so there is one implementation of an install and no
+second copy to drift. What differs is how the clusters are chosen: `apply` uses what the merge
+touched, `dispatch` uses a selector you pick.
 
 ---
 

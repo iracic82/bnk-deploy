@@ -11,6 +11,9 @@ Selector, from the SELECT env var:
   profile:dpu             every enabled cluster running one profile
   name:prod-eu-west       one cluster by name, enabled or not
   runner:hub              every enabled cluster driven from a hub runner
+  changed                 only the clusters whose files a pull request or push touched, read from
+                          the CHANGED_FILES env var, one path per line. This is the selector the
+                          PR driven flow uses, so a change to one cluster never touches another.
 """
 import json
 import os
@@ -49,6 +52,19 @@ def select(clusters, sel):
     sel = (sel or "all").strip()
     if sel == "all":
         return [c for c in clusters if c.get("enabled")]
+    if sel == "changed":
+        # Act only on what the diff touched. A change anywhere outside clusters/ deliberately
+        # selects nothing, because editing the installer must not trigger installs.
+        touched = {
+            line.strip()
+            for line in os.environ.get("CHANGED_FILES", "").splitlines()
+            if line.strip().startswith("clusters/") and line.strip().endswith(".yaml")
+        }
+        if not touched:
+            return []
+        hit = [c for c in clusters if c["_file"] in touched]
+        # a cluster file can be touched while disabled, which means someone is preparing it
+        return [c for c in hit if c.get("enabled")]
     if ":" not in sel:
         sys.exit(f"unrecognised selector {sel!r}, see the docstring")
     key, val = sel.split(":", 1)

@@ -1,72 +1,124 @@
 name: plan
 
-# Server side dry run against a real cluster, executed by the self hosted runner that lives on
-# that cluster's host. Nothing is changed. On a pull request the result is posted as a comment.
+# The pull request side of the flow. When a PR touches a cluster file, this plans that cluster
+# against its real cluster and posts the result as a PR comment, so the diff is reviewed alongside
+# what it would actually do. Nothing is changed.
 #
-# Self hosted runners and forks: this repo is private, so PRs come from branches rather than
-# forks and running on a self hosted runner is safe. Do not make the repo public without
-# revisiting that.
+# Only the clusters the PR touched are planned. Editing the installer itself plans nothing, because
+# a change to install.sh must not fan out across the fleet.
+#
+# Self hosted runners and forks: this repo is private, so PRs come from branches rather than forks
+# and running on a self hosted runner is safe. Revisit that before making it public.
 
 on:
   pull_request:
-    paths: ['install.sh', 'lib/**', 'profiles/**', 'environments/**', 'versions.env']
+    paths: ['clusters/**']
   workflow_dispatch:
     inputs:
-      runner_label:
-        description: "Runner label to target, see fleet/runners.yaml"
+      select:
+        description: "Which clusters. all | env:production | profile:dpu | name:<cluster>"
         required: true
-        default: "lab-1"
-      environment:
-        description: "Environment"
-        required: true
-        default: "lab"
-        type: choice
-        options: [lab, demo, staging, production]
-      profile:
-        description: "Deployment profile"
-        required: true
-        default: "host"
-        type: choice
-        options: [host, dpu]
+        default: "all"
 
 permissions:
   contents: read
   pull-requests: write
 
 jobs:
+  which:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet pyyaml
+
+      - name: which cluster files did this change touch
+        if: github.event_name == 'pull_request'
+        run: |
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" > "$RUNNER_TEMP/changed.txt"
+          echo "changed:"; sed 's/^/  /' "$RUNNER_TEMP/changed.txt"
+          {
+            echo 'CHANGED_FILES<<EOF'
+            cat "$RUNNER_TEMP/changed.txt"
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
+
+      - id: plan
+        env:
+          SELECT: ${{ github.event_name == 'pull_request' && 'changed' || inputs.select }}
+        run: python3 .github/scripts/plan_clusters.py
+
+      - name: say so when a PR touches no enabled cluster
+        if: github.event_name == 'pull_request' && steps.plan.outputs.count == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body \
+            "No enabled cluster was touched by this change, so there is nothing to plan."
+
   plan:
-    runs-on: [self-hosted, bnk, "${{ inputs.runner_label || 'lab-1' }}"]
-    environment: bnk-${{ inputs.environment || 'lab' }}
+    needs: which
+    if: needs.which.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include: ${{ fromJSON(needs.which.outputs.matrix) }}
+    runs-on: [self-hosted, bnk, "${{ matrix.runner_label }}"]
+    environment: bnk-${{ matrix.environment }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
-      - name: pull credentials
+      - name: credentials
         env:
           FAR_PULL_B64: ${{ secrets.FAR_PULL_B64 }}
         run: |
           printf '%s' "$FAR_PULL_B64" > "$RUNNER_TEMP/far.json"
           chmod 600 "$RUNNER_TEMP/far.json"
 
+      - name: hub kubeconfig, if this cluster is hub driven
+        env:
+          HUB_KUBECONFIGS: ${{ secrets.HUB_KUBECONFIGS }}
+          CTX: ${{ matrix.kube_context }}
+        run: |
+          if [ "${{ matrix.runner }}" = "hub" ]; then
+            [ -n "$HUB_KUBECONFIGS" ] || { echo "hub cluster but HUB_KUBECONFIGS is not set"; exit 1; }
+            mkdir -p "$RUNNER_TEMP/kube"
+            printf '%s' "$HUB_KUBECONFIGS" | base64 -d > "$RUNNER_TEMP/kube/config"
+            chmod 600 "$RUNNER_TEMP/kube/config"
+            echo "KUBECONFIG=$RUNNER_TEMP/kube/config" >> "$GITHUB_ENV"
+          fi
+          echo "KUBE_CONTEXT=$CTX" >> "$GITHUB_ENV"
+
       - name: plan
-        id: plan
         env:
           FAR_PULL_JSON: ${{ runner.temp }}/far.json
+          BNK_STORAGECLASS: ${{ matrix.storage_class }}
+          BNK_POD_CIDR: ${{ matrix.pod_cidr }}
         run: |
           set -o pipefail
-          ./install.sh --env "${{ inputs.environment || 'lab' }}" \
-                       --profile "${{ inputs.profile || 'host' }}" \
-                       --dry-run --skip-license 2>&1 | tee "$RUNNER_TEMP/plan.txt"
+          ./install.sh --env "${{ matrix.environment }}" --profile "${{ matrix.profile }}" \
+            --dry-run --skip-license 2>&1 | tee "$RUNNER_TEMP/plan.txt"
 
-      - name: comment the plan on the pull request
+      - name: post the plan on the pull request
         if: github.event_name == 'pull_request' && always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           {
-            echo "### BNK plan on \`${{ inputs.runner_label || 'lab-1' }}\`"
+            echo "### Plan for \`${{ matrix.name }}\`"
             echo
-            echo "env \`${{ inputs.environment || 'lab' }}\` profile \`${{ inputs.profile || 'host' }}\`, server side dry run, nothing changed."
+            echo "environment \`${{ matrix.environment }}\` · profile \`${{ matrix.profile }}\` · runner \`${{ matrix.runner_label }}\`"
+            echo
+            echo "Server side dry run. Nothing was changed."
             echo
             echo '```'
             sed -e 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/plan.txt" | tail -40
@@ -76,4 +128,4 @@ jobs:
 
       - name: wipe credentials
         if: always()
-        run: rm -f "$RUNNER_TEMP/far.json"
+        run: rm -rf "$RUNNER_TEMP/far.json" "$RUNNER_TEMP/kube"
