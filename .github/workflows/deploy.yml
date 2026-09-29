@@ -28,7 +28,7 @@ on:
       runner_label:
         description: "Runner label to target, see fleet/runners.yaml"
         required: true
-        default: "puget-lab"
+        default: "lab-1"
       environment:
         description: "Environment"
         required: true

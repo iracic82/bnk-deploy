@@ -9,7 +9,7 @@
 #
 # Usage:
 #   GH_RUNNER_TOKEN=... ./install-runner.sh \
-#     --repo iracic82/bnk-deploy --label tokyo-dpu-1 --env production --profile dpu
+#     --repo OWNER/REPO --label prod-eu-west-1 --env production --profile dpu
 #
 # The label is how workflows address this host, matching the fleet/runners.yaml entry.
 #

@@ -1,32 +1,28 @@
-# The BNK runner fleet. One entry per self hosted runner, so the fleet is documented in git
-# rather than only visible in the GitHub settings page.
+# The runner fleet. One entry per self hosted runner, so the fleet is documented in git rather than
+# only visible in the GitHub settings page.
 #
 # Register a host with:
 #   GH_RUNNER_TOKEN=... ./bootstrap/install-runner.sh \
-#     --repo iracic82/bnk-deploy --label <label> --env <env> --profile <host|dpu>
+#     --repo OWNER/REPO --label <label> --env <env> --profile <host|dpu>
 #
 # Workflows address a runner by its label:
 #   runs-on: [self-hosted, bnk, "<label>"]
+#
+# These are EXAMPLES matching clusters/. Replace them with your own.
 
 runners:
-  - label: puget-lab
-    description: Local development and dry runs. kind cluster, no BlueField.
+  - label: lab-1
+    description: Example. Development cluster, runner on the same host.
     environment: lab
     profile: host
-    cluster: kind-bnk-dryrun
-    notes: Validation only. The csrc fluentbit sidecar crash loops on kind, so BNK
-      never reaches fully Available here. Everything up to TMM does work.
 
-  - label: tokyo-dpu-1
-    description: Tokyo bare metal lab, BlueField-3 fitted.
-    environment: staging
+  - label: prod-eu-west-1
+    description: Example. Production cluster with BlueField, runner on the same host.
+    environment: production
     profile: dpu
-    cluster: dpu-server-2
-    notes: Reachable from the jumphost over tmfifo at 192.168.100.2. Use the
-      dpubnkctl path for a from-nothing build.
 
-  # - label: <your-host>
-  #   description:
-  #   environment: production
-  #   profile: dpu
-  #   cluster:
+  - label: bnk-hub
+    description: Example. Shared hub runner holding a merged kubeconfig for clusters that
+      cannot host a runner of their own. Protect it like a jump host, it can reach all of them.
+    environment: production
+    profile: host

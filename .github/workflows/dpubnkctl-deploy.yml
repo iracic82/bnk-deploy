@@ -18,7 +18,7 @@ on:
       site:
         description: 'Site file in dpubnkctl/env'
         required: true
-        default: 'tokyo'
+        default: 'example'
       action:
         description: 'What to do'
         required: true

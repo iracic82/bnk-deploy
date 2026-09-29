@@ -124,18 +124,21 @@ in `dpubnkctl/env/<site>.env` rather than in the scripts.
 Add a file to `clusters/` and the cluster is in the fleet. That is the whole onboarding step, so it
 happens in a pull request rather than in someone's head.
 
+The files shipped here are **examples and are all disabled**, so a fresh clone can target nothing
+until you say otherwise. Copy one, rename it, fill in your values and set `enabled: true`.
+
 ```yaml
-# clusters/eu-west-prod.yaml
-name: eu-west-prod
-description: Production inference cluster, Frankfurt, BlueField fitted.
+# clusters/prod-eu-west.yaml
+name: prod-eu-west
+description: Production inference cluster, BlueField fitted.
 
 runner: beside                 # beside | hub
-runner_label: eu-west-prod-1
+runner_label: prod-eu-west-1
 
 environment: production        # lab | demo | staging | production
 profile: dpu                   # host | dpu
 
-kube_context: eu-west-prod
+kube_context: prod-eu-west
 storage_class: nfs
 pod_cidr: 192.168.0.0/16
 
@@ -168,7 +171,7 @@ Then from the Actions tab, run **dispatch**:
 ```
 select: all              action: plan     # dry run every enabled cluster, always safe
 select: env:production   action: apply    # needs BNK_FLEET_APPLY_ENABLED
-select: name:eu-west-prod action: apply   # one cluster, no gate needed
+select: name:prod-eu-west action: apply   # one cluster, no gate needed
 select: profile:dpu      action: verify   # health check every DPU cluster
 ```
 
@@ -193,7 +196,7 @@ Mix both in one fleet. Register a host with:
 GH_RUNNER_TOKEN=$(gh api -X POST repos/OWNER/REPO/actions/runners/registration-token -q .token)
 
 sudo -E ./bootstrap/install-runner.sh \
-  --repo OWNER/REPO --label eu-west-prod-1 --env production --profile dpu
+  --repo OWNER/REPO --label prod-eu-west-1 --env production --profile dpu
 ```
 
 It refuses to register a host that cannot reach a cluster, installs what the workflows need, and
@@ -346,6 +349,22 @@ plane entirely, so an unlicensed run cannot reach it.
 scalable functions, needs real BlueField hardware to prove.
 
 ---
+
+## Keeping your inventory private
+
+Your cluster inventory describes your topology, so think about where it lives before you put real
+values in it.
+
+**If this repo is private to your team**, commit your clusters straight into `clusters/`. That is
+the design, and it is what makes an added cluster reviewable in a pull request.
+
+**If you fork this publicly, or share it outward**, keep the shipped examples as documentation and
+hold your real inventory somewhere private. Two workable shapes: keep a private fork that carries
+your real `clusters/`, or add real files in a private overlay repo and point the planner at it. The
+planner only reads `clusters/*.yaml`, so redirecting it is a one line change.
+
+Nothing else in the repo contains topology. Addresses, interface names, bridge names and DPU counts
+all live in `dpubnkctl/env/<site>.env`, which is gitignored by default.
 
 ## Scope
 

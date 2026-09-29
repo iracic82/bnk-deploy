@@ -9,7 +9,7 @@ Selector, from the SELECT env var:
   all                     every enabled cluster
   env:production          every enabled cluster in one environment
   profile:dpu             every enabled cluster running one profile
-  name:tokyo-dpu          one cluster by name, enabled or not
+  name:prod-eu-west       one cluster by name, enabled or not
   runner:hub              every enabled cluster driven from a hub runner
 """
 import json

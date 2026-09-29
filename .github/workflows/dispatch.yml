@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       select:
-        description: "Which clusters. all | env:production | profile:dpu | name:tokyo-dpu | runner:hub"
+        description: "Which clusters. all | env:production | profile:dpu | name:prod-eu-west | runner:hub"
         required: true
         default: "all"
       action:

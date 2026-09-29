@@ -1,0 +1,17 @@
+# EXAMPLE. Copy, rename to your cluster, set enabled true.
+#
+# A development or CI cluster with a runner on its own host.
+name: lab-1
+description: Example. Development cluster, software only, runner on the same host.
+
+runner: beside               # beside | hub
+runner_label: lab-1          # must match the label given to bootstrap/install-runner.sh
+
+environment: lab             # lab | demo | staging | production
+profile: host                # host | dpu
+
+kube_context: lab-1          # the kubectl context name on that host
+storage_class: standard
+pod_cidr: 192.168.0.0/16
+
+enabled: false               # examples ship disabled so a fresh clone targets nothing

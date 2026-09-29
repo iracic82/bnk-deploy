@@ -1,0 +1,18 @@
+# EXAMPLE. Copy, rename to your cluster, set enabled true.
+#
+# A production inference cluster with BlueField cards, runner on its own host so nothing
+# reaches inbound.
+name: prod-eu-west
+description: Example. Production inference cluster, BlueField fitted.
+
+runner: beside
+runner_label: prod-eu-west-1
+
+environment: production
+profile: dpu
+
+kube_context: prod-eu-west
+storage_class: nfs
+pod_cidr: 192.168.0.0/16
+
+enabled: false

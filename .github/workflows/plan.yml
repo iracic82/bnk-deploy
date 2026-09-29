@@ -15,7 +15,7 @@ on:
       runner_label:
         description: "Runner label to target, see fleet/runners.yaml"
         required: true
-        default: "puget-lab"
+        default: "lab-1"
       environment:
         description: "Environment"
         required: true
@@ -35,7 +35,7 @@ permissions:
 
 jobs:
   plan:
-    runs-on: [self-hosted, bnk, "${{ inputs.runner_label || 'puget-lab' }}"]
+    runs-on: [self-hosted, bnk, "${{ inputs.runner_label || 'lab-1' }}"]
     environment: bnk-${{ inputs.environment || 'lab' }}
     timeout-minutes: 20
     steps:
@@ -64,7 +64,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           {
-            echo "### BNK plan on \`${{ inputs.runner_label || 'puget-lab' }}\`"
+            echo "### BNK plan on \`${{ inputs.runner_label || 'lab-1' }}\`"
             echo
             echo "env \`${{ inputs.environment || 'lab' }}\` profile \`${{ inputs.profile || 'host' }}\`, server side dry run, nothing changed."
             echo

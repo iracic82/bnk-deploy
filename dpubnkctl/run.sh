@@ -6,10 +6,10 @@
 # blocks become the post-scripts dpubnkctl already hooks.
 #
 # Usage:
-#   ./run.sh --site tokyo                 full deploy
-#   ./run.sh --site tokyo --stage wizard  stop after discovery and the poc.yaml corrections
-#   ./run.sh --site tokyo --verify        just re-run the verification
-#   ./run.sh --site tokyo --destroy       tear the PoC down
+#   ./run.sh --site example               full deploy
+#   ./run.sh --site example --stage wizard  stop after discovery and the poc.yaml corrections
+#   ./run.sh --site example --verify        just re-run the verification
+#   ./run.sh --site example --destroy       tear the PoC down
 #
 # Expects on the jumphost: dpubnkctl binary, docker, yq, sshpass, and skopeo for online mode.
 # Expects secrets out of band, never in git:

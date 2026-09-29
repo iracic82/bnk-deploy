@@ -1,0 +1,22 @@
+# EXAMPLE. Copy, rename to your cluster, set enabled true.
+#
+# A cluster with no runner of its own, driven from a shared hub runner.
+#
+# The hub holds one merged kubeconfig, secret HUB_KUBECONFIGS, containing a context per cluster.
+# Dynamic secret names are not possible in Actions, so one merged file with named contexts is both
+# simpler and the usual practice. Remember the hub can reach every cluster in that file, so protect
+# it like a jump host.
+name: prod-us-east
+description: Example. Production cluster driven from the shared hub runner.
+
+runner: hub
+runner_label: bnk-hub
+
+environment: production
+profile: host
+
+kube_context: prod-us-east   # required for hub runners, picks this cluster out of the merged file
+storage_class: nfs
+pod_cidr: 192.168.0.0/16
+
+enabled: false

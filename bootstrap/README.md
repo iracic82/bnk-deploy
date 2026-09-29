@@ -12,16 +12,16 @@ credentials, not cluster ones.
 ## Register a host
 
 ```bash
-GH_RUNNER_TOKEN=$(gh api -X POST repos/iracic82/bnk-deploy/actions/runners/registration-token -q .token)
+GH_RUNNER_TOKEN=$(gh api -X POST repos/OWNER/REPO/actions/runners/registration-token -q .token)
 
 sudo -E ./install-runner.sh \
-  --repo iracic82/bnk-deploy \
-  --label tokyo-dpu-1 \
+  --repo OWNER/REPO \
+  --label prod-eu-west-1 \
   --env production \
   --profile dpu
 ```
 
-The label is how workflows address the host: `runs-on: [self-hosted, bnk, "tokyo-dpu-1"]`.
+The label is how workflows address the host: `runs-on: [self-hosted, bnk, "prod-eu-west-1"]`.
 
 What it does. Installs `curl`, `jq`, `git`, `openssl`, and helm if absent. For the DPU profile also
 `sshpass` and it insists on `yq`, because the dpubnkctl wizard post-script needs it. Refuses to
