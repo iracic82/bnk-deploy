@@ -7,7 +7,10 @@ chk "F5 CRDs registered"     "[ \$(kubectl get crd -o name | grep -c 'k8s.f5') -
 chk "CNEInstance exists"     "kubectl get cneinstance -n $NS_BNK f5-bnk-instance"
 chk "no pods crash looping"  "! kubectl get pods -n $NS_BNK --no-headers | grep -q CrashLoopBackOff"
 chk "no image pull errors"   "! kubectl get pods -A --no-headers | grep -qE 'ImagePullBackOff|ErrImagePull'"
+# Installed by BNK's own CRD installer, so its absence means the install did not get far enough
+# rather than that the cluster is missing something.
 chk "Gateway API present"    "kubectl get crd gatewayclasses.gateway.networking.k8s.io"
+chk "control plane has pods" "[ \$(kubectl get pods -n $NS_CORE --no-headers 2>/dev/null | grep -c Running) -ge 5 ]"
 if [[ "$SKIP_LICENSE" == "0" ]]; then
   chk "licence Active"       "kubectl get license.k8s.f5net.com f5-cne-cluster-license -n $NS_CORE -o jsonpath='{.status.state}' | grep -q Active"
 fi

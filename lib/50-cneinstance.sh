@@ -45,8 +45,20 @@ while [[ $(date +%s) -lt $deadline ]]; do
   if [[ "${SKIP_LICENSE:-0}" == "1" ]]; then
     pending=$(printf '%s\n' "$conds" | tr ' ' '\n' | grep '=False$' \
                 | grep -vE '^(Available|F5TmmAvailable)=' | sed 's/=False//' | paste -sd, - || true)
-    # everything a licence does not gate is satisfied, so this is as far as it can get
-    if [[ -z "$pending" && -n "$conds" ]]; then break; fi
+
+    # The absence of a False condition does not mean ready. Moments after the CNEInstance is
+    # created the operator has not populated its component conditions yet, so nothing is False
+    # simply because nothing is there. Waiting on that alone declared success 0.12 seconds after
+    # apply, with one pod running, on a fresh cluster.
+    #
+    # Reconciled=True is the operator saying it has finished laying the stack out, and the
+    # component conditions have to actually be present, so require both.
+    reconciled=$(printf '%s\n' "$conds" | tr ' ' '\n' | sed -n 's/^Reconciled=//p' | head -1)
+    components=$(printf '%s\n' "$conds" | tr ' ' '\n' | grep -cE '^[A-Za-z]+Available=True$' || true)
+    if [[ -z "$pending" && "$reconciled" == "True" && "${components:-0}" -ge 5 ]]; then break; fi
+    if [[ -z "$pending" ]]; then
+      pending="reconciling, ${components:-0} components up"
+    fi
   else
     pending=$(printf '%s\n' "$conds" | tr ' ' '\n' | grep '=False$' \
                 | sed 's/=False//' | paste -sd, - || true)
