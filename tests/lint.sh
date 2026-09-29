@@ -7,12 +7,20 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$HERE" || exit 1
 
+# shellcheck disable=SC1091
+source "$HERE/versions.env"
+
 fail=0
 step() { printf '\n\033[1;36m==> %s\033[0m\n' "$1"; }
 ok()   { printf '    \033[0;32mok\033[0m  %s\n' "$1"; }
 bad()  { printf '    \033[0;31mXX\033[0m  %s\n' "$1"; fail=$((fail+1)); }
 
 step "shellcheck"
+have="v$(shellcheck --version | awk '/^version:/{print $2}')"
+if [[ "$have" != "${SHELLCHECK_VERSION}" ]]; then
+  printf '    \033[0;33m!!\033[0m  shellcheck %s, pinned is %s. Findings can differ between versions,\n' "$have" "$SHELLCHECK_VERSION"
+  printf '        so CI may disagree with this run. Install the pinned one to be sure.\n'
+fi
 # Only two suppressions, both justified. SC1090/SC1091 because lib/*.sh are sourced at runtime and
 # SC2034/SC2154/SC2148 because they are fragments that inherit their variables from install.sh.
 if shellcheck -s bash -e SC1090,SC1091 \

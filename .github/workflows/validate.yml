@@ -23,12 +23,23 @@ jobs:
 
       - name: lint
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          # Install the pinned shellcheck rather than the distro one. The distro version differs
+          # between a developer box and a runner, and so do its findings.
+          # shellcheck disable=SC1091
+          . ./versions.env
+          curl -sSLo /tmp/sc.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          tar -xf /tmp/sc.tar.xz -C /tmp
+          sudo install -m 0755 "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          shellcheck --version | grep version:
           ./tests/lint.sh
 
       - name: actionlint
         run: |
-          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          # shellcheck disable=SC1091
+          . ./versions.env
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) \
+            "${ACTIONLINT_VERSION#v}"
           ./actionlint -color
 
 
