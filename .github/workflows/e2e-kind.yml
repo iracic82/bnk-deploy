@@ -26,15 +26,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: load pinned versions
-        # versions.env carries comments and blank lines, which GITHUB_ENV rejects, so only pass
-        # through the actual assignments.
-        # GITHUB_ENV takes the whole line as the value, so a trailing comment would become part of
-        # it and CALICO_VERSION would end up as "v3.29.1    # ...". Strip comments and whitespace.
+        # GITHUB_ENV takes the whole line as the value, so comments and trailing whitespace have to
+        # go or CALICO_VERSION arrives as "v3.29.1    # ..." and the manifest URL breaks.
         run: |
-          grep -E '^[A-Z_]+=' versions.env \
-            | sed -E 's/[[:space:]]*#.*$//; s/[[:space:]]+$//' \
-            >> "$GITHUB_ENV"
-          echo "loaded:"; grep -E '^(CALICO|MULTUS|CERT_MANAGER|K8S)' "$GITHUB_ENV" | sed 's/^/  /'"'"
+          grep -E '^[A-Z_]+=' versions.env | sed -E 's/[[:space:]]*#.*$//' | sed -E 's/[[:space:]]+$//' >> "$GITHUB_ENV"
+          echo "loaded these:"
+          grep -E '^[A-Z_]+=' versions.env | sed -E 's/[[:space:]]*#.*$//' | sed -E 's/[[:space:]]+$//'
 
       - uses: helm/kind-action@v1
         with:

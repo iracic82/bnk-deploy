@@ -3,3 +3,6 @@
 cne_pull_64.json
 f5-far-auth-key.tgz
 kubeconfig
+node_modules/
+package-lock.json
+package.json
