@@ -1,17 +1,16 @@
-# EXAMPLE. Copy, rename to your cluster, set enabled true.
-#
-# A development or CI cluster with a runner on its own host.
+# Development cluster on the Puget host, three node kind cluster with Calico.
+# The runner lives on the same host, so no kubeconfig is stored anywhere.
 name: lab-1
-description: Example. Development cluster, software only, runner on the same host.
+description: Development cluster, three nodes, software only. Used to validate changes.
 
-runner: beside               # beside | hub
-runner_label: lab-1          # must match the label given to bootstrap/install-runner.sh
+runner: beside
+runner_label: lab-1
 
-environment: lab             # lab | demo | staging | production
-profile: host                # host | dpu
+environment: lab
+profile: host
 
-kube_context: lab-1          # the kubectl context name on that host
+kube_context: kind-bnk-multi
 storage_class: standard
 pod_cidr: 192.168.0.0/16
 
-enabled: false               # examples ship disabled so a fresh clone targets nothing
+enabled: true
