@@ -1,0 +1,75 @@
+name: e2e-kind
+
+# Proves the installer against a throwaway Kubernetes 1.30 cluster with Calico, on a hosted
+# runner, then installs a second time to prove idempotency. This is what stops the installer
+# rotting, and it needs no self hosted runner and no real cluster.
+#
+# It cannot reach a fully Available BNK: the csrc f5-fluentbit sidecar crash loops on kind.
+# Everything up to and including the CNEInstance laying down its stack does work, which is the
+# part worth regression testing.
+
+on:
+  pull_request:
+    paths: ['install.sh', 'lib/**', 'profiles/**', 'environments/**', 'versions.env', 'ci/**', '.github/workflows/e2e-kind.yml']
+  push:
+    branches: [main]
+    paths: ['install.sh', 'lib/**', 'profiles/**', 'environments/**', 'versions.env', 'ci/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - run: cat versions.env >> "$GITHUB_ENV"
+
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: bnk-e2e
+          node_image: kindest/node:v1.30.13
+          config: ci/kind.yaml
+
+      - name: Calico
+        run: |
+          kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/tigera-operator.yaml
+          sleep 15
+          kubectl create -f ci/calico-installation.yaml
+          kubectl wait --for=condition=Ready node --all --timeout=300s
+          kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
+
+      - name: hugepages, then make kubelet rediscover them
+        run: |
+          sudo sysctl -w vm.nr_hugepages=2048
+          docker exec bnk-e2e-control-plane systemctl restart kubelet
+          sleep 25
+          kubectl get node bnk-e2e-control-plane -o jsonpath='{.status.allocatable.hugepages-2Mi}{"\n"}'
+
+      - name: credentials
+        env:
+          FAR_PULL_B64: ${{ secrets.FAR_PULL_B64 }}
+        run: |
+          [ -n "$FAR_PULL_B64" ] || { echo "FAR_PULL_B64 secret not set, cannot reach repo.f5.com"; exit 1; }
+          printf '%s' "$FAR_PULL_B64" > "$RUNNER_TEMP/far.json"; chmod 600 "$RUNNER_TEMP/far.json"
+
+      - name: install
+        env:
+          FAR_PULL_JSON: ${{ runner.temp }}/far.json
+          BNK_STORAGECLASS: standard
+        run: ./install.sh --env lab --profile host --skip-license
+
+      - name: install again, must be a no op
+        env:
+          FAR_PULL_JSON: ${{ runner.temp }}/far.json
+          BNK_STORAGECLASS: standard
+        run: ./install.sh --env lab --profile host --skip-license
+
+      - name: diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -40 || true
+          kubectl logs -n f5-cne-core deploy/f5-lifecycle-operator --tail=80 || true

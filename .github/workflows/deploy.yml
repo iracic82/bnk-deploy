@@ -1,0 +1,96 @@
+name: deploy
+
+# Applies BNK on the host that owns the cluster. Manual dispatch only, because an install is not
+# something a merge should trigger by itself. A plan always runs first in the same job, so you
+# never apply without having just seen what it would do.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: "Runner label to target, see fleet/runners.yaml"
+        required: true
+        default: "puget-lab"
+      environment:
+        description: "Environment"
+        required: true
+        type: choice
+        options: [lab, demo, staging, production]
+      profile:
+        description: "Deployment profile"
+        required: true
+        type: choice
+        options: [host, dpu]
+      action:
+        description: "apply installs. uninstall removes BNK and leaves cert-manager, Multus and Calico."
+        required: true
+        default: apply
+        type: choice
+        options: [apply, uninstall]
+      skip_license:
+        description: "Install unlicensed. Refused by demo, staging and production."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # never two installs against the same cluster at once
+  group: bnk-${{ inputs.runner_label }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, bnk, "${{ inputs.runner_label }}"]
+    environment: bnk-${{ inputs.environment }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: show what we are about to do
+        run: |
+          echo "runner   ${{ inputs.runner_label }}"
+          echo "env      ${{ inputs.environment }}"
+          echo "profile  ${{ inputs.profile }}"
+          echo "action   ${{ inputs.action }}"
+          echo "cluster  $(kubectl config current-context)"
+          kubectl get nodes -o wide
+
+      - name: credentials
+        env:
+          FAR_PULL_B64: ${{ secrets.FAR_PULL_B64 }}
+        run: |
+          [ -n "$FAR_PULL_B64" ] || { echo "FAR_PULL_B64 not set for bnk-${{ inputs.environment }}"; exit 1; }
+          printf '%s' "$FAR_PULL_B64" > "$RUNNER_TEMP/far.json"
+          chmod 600 "$RUNNER_TEMP/far.json"
+
+      - name: plan first, always
+        if: inputs.action == 'apply'
+        env:
+          FAR_PULL_JSON: ${{ runner.temp }}/far.json
+        run: ./install.sh --env ${{ inputs.environment }} --profile ${{ inputs.profile }} --dry-run --skip-license
+
+      - name: apply
+        if: inputs.action == 'apply'
+        env:
+          FAR_PULL_JSON: ${{ runner.temp }}/far.json
+          BNK_LICENSE_JWT: ${{ secrets.BNK_LICENSE_JWT }}
+        run: |
+          ./install.sh --env ${{ inputs.environment }} --profile ${{ inputs.profile }} \
+            ${{ inputs.skip_license && '--skip-license' || '' }}
+
+      - name: uninstall
+        if: inputs.action == 'uninstall'
+        run: ./uninstall.sh
+
+      - name: diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide | grep -vE 'Running|Completed' || true
+          kubectl get cneinstance -A -o jsonpath='{range .items[*].status.conditions[*]}{.type}={.status} {.message}{"\n"}{end}' || true
+          kubectl logs -n f5-cne-core deploy/f5-lifecycle-operator --tail=60 || true
+
+      - name: wipe credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/far.json"

@@ -1,0 +1,50 @@
+name: cluster-check
+
+# Health of a BNK cluster, run by the host that owns it. Verification only, changes nothing.
+# Runs on a schedule as a drift check, and on demand.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: "Runner label to target"
+        required: true
+        default: "puget-lab"
+      environment:
+        description: "Environment"
+        required: true
+        default: "lab"
+        type: choice
+        options: [lab, demo, staging, production]
+  schedule:
+    - cron: '17 6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        # On a schedule, check every long lived runner in the fleet. Extend as the fleet grows.
+        include: ${{ github.event_name == 'schedule'
+          && fromJSON('[{"label":"tokyo-dpu-1","env":"staging"}]')
+          || fromJSON(format('[{{"label":"{0}","env":"{1}"}}]', inputs.runner_label, inputs.environment)) }}
+    runs-on: [self-hosted, bnk, "${{ matrix.label }}"]
+    environment: bnk-${{ matrix.env }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: credentials
+        env:
+          FAR_PULL_B64: ${{ secrets.FAR_PULL_B64 }}
+        run: |
+          printf '%s' "$FAR_PULL_B64" > "$RUNNER_TEMP/far.json"; chmod 600 "$RUNNER_TEMP/far.json"
+      - name: verify
+        env:
+          FAR_PULL_JSON: ${{ runner.temp }}/far.json
+        run: ./install.sh --env ${{ matrix.env }} --phase 70
+      - name: wipe credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/far.json"

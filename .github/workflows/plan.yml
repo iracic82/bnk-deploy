@@ -1,0 +1,79 @@
+name: plan
+
+# Server side dry run against a real cluster, executed by the self hosted runner that lives on
+# that cluster's host. Nothing is changed. On a pull request the result is posted as a comment.
+#
+# Self hosted runners and forks: this repo is private, so PRs come from branches rather than
+# forks and running on a self hosted runner is safe. Do not make the repo public without
+# revisiting that.
+
+on:
+  pull_request:
+    paths: ['install.sh', 'lib/**', 'profiles/**', 'environments/**', 'versions.env']
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: "Runner label to target, see fleet/runners.yaml"
+        required: true
+        default: "puget-lab"
+      environment:
+        description: "Environment"
+        required: true
+        default: "lab"
+        type: choice
+        options: [lab, demo, staging, production]
+      profile:
+        description: "Deployment profile"
+        required: true
+        default: "host"
+        type: choice
+        options: [host, dpu]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  plan:
+    runs-on: [self-hosted, bnk, "${{ inputs.runner_label || 'puget-lab' }}"]
+    environment: bnk-${{ inputs.environment || 'lab' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: pull credentials
+        env:
+          FAR_PULL_B64: ${{ secrets.FAR_PULL_B64 }}
+        run: |
+          printf '%s' "$FAR_PULL_B64" > "$RUNNER_TEMP/far.json"
+          chmod 600 "$RUNNER_TEMP/far.json"
+
+      - name: plan
+        id: plan
+        env:
+          FAR_PULL_JSON: ${{ runner.temp }}/far.json
+        run: |
+          set -o pipefail
+          ./install.sh --env "${{ inputs.environment || 'lab' }}" \
+                       --profile "${{ inputs.profile || 'host' }}" \
+                       --dry-run --skip-license 2>&1 | tee "$RUNNER_TEMP/plan.txt"
+
+      - name: comment the plan on the pull request
+        if: github.event_name == 'pull_request' && always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "### BNK plan on \`${{ inputs.runner_label || 'puget-lab' }}\`"
+            echo
+            echo "env \`${{ inputs.environment || 'lab' }}\` profile \`${{ inputs.profile || 'host' }}\`, server side dry run, nothing changed."
+            echo
+            echo '```'
+            sed -e 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/plan.txt" | tail -40
+            echo '```'
+          } > "$RUNNER_TEMP/comment.md"
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file "$RUNNER_TEMP/comment.md"
+
+      - name: wipe credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/far.json"

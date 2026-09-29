@@ -1,0 +1,75 @@
+name: validate
+
+# Runs on every pull request and every push. Hosted runner, no cluster needed.
+# Nothing here can change a cluster, so it is safe on any PR.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck -s bash -e SC1090,SC1091,SC2029 install.sh uninstall.sh bootstrap/*.sh dpubnkctl/*.sh dpubnkctl/post-scripts/*.sh
+          shellcheck -s bash -e SC1090,SC1091,SC2034,SC2154,SC2148 lib/*.sh
+
+      - name: every version is pinned, none floating
+        run: |
+          if grep -E '^[A-Z_]+=' versions.env | grep -iqE '=(latest|main|master)$'; then
+            echo "floating version in versions.env"; grep -inE '=(latest|main|master)$' versions.env; exit 1
+          fi
+          echo "all versions pinned"
+
+      - name: profiles render to valid yaml for every environment
+        run: |
+          python3 - <<'PY'
+          import subprocess, yaml, glob, os, re
+          envs = [os.path.basename(f)[:-4] for f in glob.glob('environments/*.env') if f.count('.') == 1]
+          fail = 0
+          for env in sorted(envs):
+              for prof in ('host', 'dpu'):
+                  out = subprocess.run(['bash','-c',
+                      f'set -a; source versions.env; source environments/{env}.env; source profiles/{prof}.env; '
+                      f'[ -r environments/{env}.{prof}.env ] && source environments/{env}.{prof}.env; set +a; '
+                      'attach=""; if [ -n "$BNK_NETWORK_ATTACHMENTS" ]; then attach="  networkAttachments:"; '
+                      'IFS=, read -ra a <<< "$BNK_NETWORK_ATTACHMENTS"; for x in "${a[@]}"; do attach="$attach"$\'\\n\'"    - $x"; done; fi; '
+                      f'sed -e "s|__MANIFEST__|$CNE_RELEASE_MANIFEST|g" -e "s|__REPO__|$CNE_REPO|g" '
+                      '-e "s|__ISSUER__|$CLUSTER_ISSUER|g" -e "s|__STORAGECLASS__|$BNK_STORAGECLASS|g" '
+                      '-e "s|__PODCIDR__|$BNK_POD_CIDR|g" -e "s|__SIZE__|$BNK_DEPLOYMENT_SIZE|g" '
+                      '-e "s|__MTU__|$BNK_TMM_MTU|g" -e "s|__DYNROUTE__|$BNK_DYNAMIC_ROUTING|g" '
+                      '-e "s|__CORECOLLECT__|$BNK_CORE_COLLECTION|g" -e "s|__DPUENABLED__|$BNK_DPU_ENABLED|g" '
+                      f'-e "s|__ZEBOS__|$BNK_ZEBOS_STATE|g" profiles/{prof}.yaml '
+                      '| awk -v b="$attach" \'{ if ($0=="__ATTACHMENTS__") { if (b!="") print b } else print }\''],
+                      capture_output=True, text=True)
+                  if out.returncode:
+                      print(f'FAIL render {env}/{prof}: {out.stderr[:200]}'); fail += 1; continue
+                  if '__' in out.stdout:
+                      print(f'FAIL {env}/{prof}: leftover placeholder'); fail += 1; continue
+                  try:
+                      yaml.safe_load(out.stdout)
+                  except Exception as e:
+                      print(f'FAIL {env}/{prof}: invalid yaml {e}'); fail += 1; continue
+                  print(f'ok  {env}/{prof}')
+          raise SystemExit(1 if fail else 0)
+          PY
+
+      - name: fleet and site files parse
+        run: python3 -c "import yaml;[yaml.safe_load(open(f)) and print('ok',f) for f in ['fleet/runners.yaml','bootstrap/site.yml']]"
+
+      - name: no secret shaped values committed
+        run: |
+          if grep -rInE '(eyJ[A-Za-z0-9_-]{20,}|BEGIN (RSA|EC|OPENSSH) PRIVATE KEY)' . --exclude-dir=.git; then
+            echo "something that looks like a credential is committed"; exit 1
+          fi
+          echo "clean"

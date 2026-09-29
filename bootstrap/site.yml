@@ -1,0 +1,27 @@
+# Host facts for one BNK site. Copy per host, commit it, and keep secrets out.
+# bootstrap/install-runner.sh reads nothing from this file. It exists so the shape of a site is
+# reviewable in a pull request rather than living in someone's shell history.
+
+site:
+  label: puget-lab                 # must match the runner label in fleet/runners.yaml
+  environment: lab                 # lab | demo | staging | production
+  profile: host                    # host | dpu
+
+cluster:
+  context: kind-bnk-dryrun
+  cni: calico                      # FLO inspects CNI type and blocks on unsupported ones
+  kubernetes: "1.30"
+  storage_class: standard
+  pod_cidr: 192.168.0.0/16
+  hugepages_2mi_pages: 2048        # mandatory wherever TMM runs, 2048 pages is 4Gi
+
+# DPU profile only. Leave empty for host.
+dpu:
+  tmfifo_address:
+  external_bridge:
+  internal_bridge:
+
+credentials:
+  # Names only. The values are GitHub environment secrets, never committed.
+  far_pull: FAR_PULL_B64
+  licence: BNK_LICENSE_JWT
