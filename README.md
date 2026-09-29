@@ -70,6 +70,7 @@ data plane and no obvious reason why.
 | Kubernetes | **1.30** | The version BNK 2.3 is qualified against |
 | CNI | **Calico** | The primary supported CNI. Flannel, VPC-CNI on EKS, OCI-CNI on Oracle and OVN-Kubernetes on OpenShift are recognised. **Cilium is not supported** and the operator will refuse it |
 | Hugepages | allocated on every node that will run TMM | TMM uses DPDK. Without them TMM is never scheduled, and no override removes the requirement |
+| CPU | roughly **17 vCPU of requests** across the cluster | Measured at `deploymentSize: Small`: about 8.4 vCPU requested in `f5-cne-core` and the same again in `f5-bnk`. Pods sit Pending with `Insufficient cpu` if the cluster cannot satisfy it |
 | Storage | a default StorageClass | The datastore components need persistent volumes |
 | Egress | outbound to `repo.f5.com` | 81 component images are pulled from there |
 | Tooling | `kubectl`, `helm`, `openssl` | On whatever runs the installer |
@@ -388,7 +389,7 @@ so you are not left hunting a problem that is not there.
 | `deploy` | called by `apply` and `dispatch` | self hosted | the single implementation. Plans then applies, or verifies, or uninstalls. Locked per cluster so two runs cannot race |
 | `dispatch` | manual | hosted then self hosted | deliberate fleet wide work, such as rolling out a version bump. Applying to more than one cluster needs `BNK_FLEET_APPLY_ENABLED` |
 | `cluster-check` | dispatch, daily | self hosted | verification only, drift detection |
-| `e2e-kind` | PR, push | hosted | throwaway 1.30 cluster with Calico, installs twice to prove idempotency |
+| `e2e-kind` | PR, push | hosted | throwaway 1.30 cluster with Calico. Runs phases 00 to 40 plus a server side CNEInstance validation, twice, to prove idempotency. It cannot install the data plane, see below |
 | `dpubnkctl-deploy` | dispatch | jumphost | bare metal DPU build |
 
 `apply` and `dispatch` both call `deploy`, so there is one implementation of an install and no
@@ -408,8 +409,13 @@ Nothing sensitive is committed, and CI fails the build if anything credential sh
 | `HUB_KUBECONFIGS` | hub runners only | One merged kubeconfig with a context per cluster |
 | `FAR_AUTH_KEY_B64` | bare metal path | The FAR auth key, the format `dpubnkctl` expects |
 
-Store them per GitHub Environment so staging and production credentials are separate and gated by
-reviewers. Runners that sit beside their cluster need **no kubeconfig secret at all**.
+Store them **per GitHub Environment** so staging and production credentials are separate and gated
+by reviewers. Runners that sit beside their cluster need **no kubeconfig secret at all**.
+
+One exception worth knowing. `e2e-kind` builds a throwaway cluster on a hosted runner and declares
+no environment, so it can only read **repository** secrets. Set `FAR_PULL_B64` at repository level
+as well if you want that regression test to run, otherwise it fails at the credentials step with
+the secret empty. Everything that touches a real cluster reads environment secrets only.
 
 ---
 
@@ -431,6 +437,13 @@ plane entirely, so an unlicensed run cannot reach it.
 
 **DPU mode** is validated as far as rendering and preflight. The node level work, flashing and
 scalable functions, needs real BlueField hardware to prove.
+
+**Why `e2e-kind` stops short of a full install.** A GitHub hosted runner has 4 vCPU and BNK requests
+around 17, so the pods sit Pending with `Insufficient cpu`. No configuration changes that. So it
+covers the parts most likely to regress, meaning preflight, the Multus before FLO ordering, the
+certificate authority chain, registry access, the pinned versions, and that a rendered CNEInstance
+is accepted by a real API server. Installing the data plane is proven on a real cluster by the
+`plan` and `apply` workflows instead.
 
 ---
 

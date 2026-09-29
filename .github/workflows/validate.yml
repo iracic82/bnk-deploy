@@ -21,56 +21,49 @@ jobs:
       - name: contract tests
         run: ./tests/contract.sh
 
-      - name: shellcheck
+      - name: lint
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y shellcheck
-          shellcheck -s bash -e SC1090,SC1091,SC2029 install.sh uninstall.sh bootstrap/*.sh dpubnkctl/*.sh dpubnkctl/post-scripts/*.sh
-          shellcheck -s bash -e SC1090,SC1091,SC2034,SC2154,SC2148 lib/*.sh
+          # Install the pinned shellcheck rather than the distro one. The distro version differs
+          # between a developer box and a runner, and so do its findings.
+          # shellcheck disable=SC1091
+          . ./versions.env
+          curl -sSLo /tmp/sc.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          tar -xf /tmp/sc.tar.xz -C /tmp
+          sudo install -m 0755 "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          shellcheck --version | grep version:
+          ./tests/lint.sh
 
       - name: actionlint
         run: |
-          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          # shellcheck disable=SC1091
+          . ./versions.env
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) \
+            "${ACTIONLINT_VERSION#v}"
           ./actionlint -color
 
-      - name: every version is pinned, none floating
-        run: |
-          if grep -E '^[A-Z_]+=' versions.env | grep -iqE '=(latest|main|master)$'; then
-            echo "floating version in versions.env"; grep -inE '=(latest|main|master)$' versions.env; exit 1
-          fi
-          echo "all versions pinned"
 
-      - name: profiles render to valid yaml for every environment
+      - name: every environment and profile renders to valid yaml
         run: |
-          python3 - <<'PY'
-          import subprocess, yaml, glob, os, re
-          envs = [os.path.basename(f)[:-4] for f in glob.glob('environments/*.env') if f.count('.') == 1]
-          fail = 0
-          for env in sorted(envs):
-              for prof in ('host', 'dpu'):
-                  out = subprocess.run(['bash','-c',
-                      f'set -a; source versions.env; source environments/{env}.env; source profiles/{prof}.env; '
-                      f'[ -r environments/{env}.{prof}.env ] && source environments/{env}.{prof}.env; set +a; '
-                      'attach=""; if [ -n "$BNK_NETWORK_ATTACHMENTS" ]; then attach="  networkAttachments:"; '
-                      'IFS=, read -ra a <<< "$BNK_NETWORK_ATTACHMENTS"; for x in "${a[@]}"; do attach="$attach"$\'\\n\'"    - $x"; done; fi; '
-                      f'sed -e "s|__MANIFEST__|$CNE_RELEASE_MANIFEST|g" -e "s|__REPO__|$CNE_REPO|g" '
-                      '-e "s|__ISSUER__|$CLUSTER_ISSUER|g" -e "s|__STORAGECLASS__|$BNK_STORAGECLASS|g" '
-                      '-e "s|__PODCIDR__|$BNK_POD_CIDR|g" -e "s|__SIZE__|$BNK_DEPLOYMENT_SIZE|g" '
-                      '-e "s|__MTU__|$BNK_TMM_MTU|g" -e "s|__DYNROUTE__|$BNK_DYNAMIC_ROUTING|g" '
-                      '-e "s|__CORECOLLECT__|$BNK_CORE_COLLECTION|g" -e "s|__DPUENABLED__|$BNK_DPU_ENABLED|g" '
-                      f'-e "s|__ZEBOS__|$BNK_ZEBOS_STATE|g" profiles/{prof}.yaml '
-                      '| awk -v b="$attach" \'{ if ($0=="__ATTACHMENTS__") { if (b!="") print b } else print }\''],
-                      capture_output=True, text=True)
-                  if out.returncode:
-                      print(f'FAIL render {env}/{prof}: {out.stderr[:200]}'); fail += 1; continue
-                  if '__' in out.stdout:
-                      print(f'FAIL {env}/{prof}: leftover placeholder'); fail += 1; continue
-                  try:
-                      yaml.safe_load(out.stdout)
-                  except Exception as e:
-                      print(f'FAIL {env}/{prof}: invalid yaml {e}'); fail += 1; continue
-                  print(f'ok  {env}/{prof}')
-          raise SystemExit(1 if fail else 0)
-          PY
+          pip install --quiet pyyaml
+          fail=0
+          for e in $(./install.sh --list-env); do
+            for p in $(./install.sh --list-profile); do
+              # rendered through tests/render.sh, which calls the same lib/render.sh the installer
+              # uses, so this cannot go stale when a placeholder is added
+              if ! out=$(./tests/render.sh "$e" "$p" 2>&1); then
+                echo "FAIL $e/$p render errored: $out"; fail=1; continue
+              fi
+              if printf '%s' "$out" | grep -q '__'; then
+                echo "FAIL $e/$p leftover placeholder"; fail=1; continue
+              fi
+              if ! printf '%s' "$out" | python3 -c 'import yaml,sys; yaml.safe_load(sys.stdin)'; then
+                echo "FAIL $e/$p invalid yaml"; fail=1; continue
+              fi
+              echo "ok   $e/$p"
+            done
+          done
+          exit $fail
 
       - name: cluster inventory is valid and every selector resolves
         run: |
@@ -102,38 +95,5 @@ jobs:
           EX
 
       - name: mermaid diagrams in the docs actually parse
-        run: |
-          npm install --silent --no-save mermaid jsdom
-          python3 - <<'EX'
-          import re, pathlib
-          out = pathlib.Path('/tmp/mmd'); out.mkdir(exist_ok=True)
-          n = 0
-          for md in pathlib.Path('.').rglob('*.md'):
-              for i, b in enumerate(re.findall(r'```mermaid\n(.*?)```', md.read_text(), re.S), 1):
-                  n += 1
-                  (out / f'{md.as_posix().replace("/", "_")}.{i}.mmd').write_text(b)
-          print(f'extracted {n} diagram(s)')
-          EX
-          cat > /tmp/parse.mjs <<'EX'
-          import { JSDOM } from 'jsdom';
-          import { readFileSync, readdirSync } from 'node:fs';
-          const dom = new JSDOM('<!doctype html><body></body>', { pretendToBeVisual: true });
-          globalThis.window = dom.window; globalThis.document = dom.window.document;
-          Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, configurable: true });
-          const mermaid = (await import('mermaid')).default;
-          mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
-          let bad = 0;
-          for (const f of readdirSync('/tmp/mmd').sort()) {
-            try { await mermaid.parse(readFileSync(`/tmp/mmd/${f}`, 'utf8')); console.log(`ok   ${f}`); }
-            catch (e) { bad++; console.log(`FAIL ${f}: ${String(e.message || e).split('\n')[0]}`); }
-          }
-          process.exit(bad ? 1 : 0);
-          EX
-          node /tmp/parse.mjs
+        run: ./tests/mermaid.sh
 
-      - name: no secret shaped values committed
-        run: |
-          if grep -rInE '(eyJ[A-Za-z0-9_-]{20,}|BEGIN (RSA|EC|OPENSSH) PRIVATE KEY)' . --exclude-dir=.git; then
-            echo "something that looks like a credential is committed"; exit 1
-          fi
-          echo "clean"

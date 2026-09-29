@@ -4,33 +4,15 @@ prof="$HERE/profiles/${PROFILE}.yaml"
 
 sc="${BNK_STORAGECLASS:-}"
 [[ -n "$sc" ]] && kubectl get sc "$sc" >/dev/null 2>&1 || sc="$(kubectl get sc -o jsonpath='{.items[0].metadata.name}')"
-# TMM_CALICO_ROUTER only applies on Calico. The documented preflight "runs additional checks for
-# pod CIDR and TMM env var for Calico", so injecting it on Flannel or OVN would be wrong.
-calico_router=""
-if [[ "${BNK_DETECTED_CNI:-calico}" == "calico" ]]; then
-  calico_router=$'        - name: TMM_CALICO_ROUTER\n          value: default'
-fi
+# shellcheck disable=SC1091
+source "$HERE/lib/render.sh"
 
-# Build the networkAttachments block from the profile. Host mode renders nothing at all.
-attach_block=""
-if [[ -n "${BNK_NETWORK_ATTACHMENTS:-}" ]]; then
-  attach_block="  networkAttachments:"
-  IFS=',' read -ra _na <<< "$BNK_NETWORK_ATTACHMENTS"
-  for a in "${_na[@]}"; do attach_block+=$'\n'"    - ${a}"; done
+sc="${BNK_STORAGECLASS:-}"
+if [[ -z "$sc" ]] || ! kubectl get sc "$sc" >/dev/null 2>&1; then
+  sc="$(kubectl get sc -o jsonpath='{.items[0].metadata.name}')"
 fi
-
-rendered=$(sed -e "s|__MANIFEST__|${CNE_RELEASE_MANIFEST}|g" \
-               -e "s|__REPO__|${CNE_REPO}|g" \
-               -e "s|__ISSUER__|${CLUSTER_ISSUER}|g" \
-               -e "s|__STORAGECLASS__|${sc}|g" \
-               -e "s|__PODCIDR__|${BNK_POD_CIDR:-192.168.0.0/16}|g" \
-               -e "s|__SIZE__|${BNK_DEPLOYMENT_SIZE:-Small}|g" \
-               -e "s|__MTU__|${BNK_TMM_MTU:-1500}|g" \
-               -e "s|__DYNROUTE__|${BNK_DYNAMIC_ROUTING:-false}|g" \
-               -e "s|__CORECOLLECT__|${BNK_CORE_COLLECTION:-false}|g" \
-               -e "s|__DPUENABLED__|${BNK_DPU_ENABLED:-false}|g" \
-               -e "s|__ZEBOS__|${BNK_ZEBOS_STATE:-}|g" \
-               "$prof" | awk -v blk="$attach_block" -v cr="$calico_router" '{ if ($0=="__ATTACHMENTS__") { if (blk!="") print blk } else if ($0=="__CALICOROUTER__") { if (cr!="") print cr } else print }')
+_render_sc="$sc"
+rendered="$(render_cneinstance "$prof")"
 
 if [[ "$DRY_RUN" == "1" ]]; then
   if echo "$rendered" | kubectl apply -n "$NS_BNK" --dry-run=server -f - >/dev/null; then
@@ -63,8 +45,20 @@ while [[ $(date +%s) -lt $deadline ]]; do
   if [[ "${SKIP_LICENSE:-0}" == "1" ]]; then
     pending=$(printf '%s\n' "$conds" | tr ' ' '\n' | grep '=False$' \
                 | grep -vE '^(Available|F5TmmAvailable)=' | sed 's/=False//' | paste -sd, - || true)
-    # everything a licence does not gate is satisfied, so this is as far as it can get
-    if [[ -z "$pending" && -n "$conds" ]]; then break; fi
+
+    # The absence of a False condition does not mean ready. Moments after the CNEInstance is
+    # created the operator has not populated its component conditions yet, so nothing is False
+    # simply because nothing is there. Waiting on that alone declared success 0.12 seconds after
+    # apply, with one pod running, on a fresh cluster.
+    #
+    # Reconciled=True is the operator saying it has finished laying the stack out, and the
+    # component conditions have to actually be present, so require both.
+    reconciled=$(printf '%s\n' "$conds" | tr ' ' '\n' | sed -n 's/^Reconciled=//p' | head -1)
+    components=$(printf '%s\n' "$conds" | tr ' ' '\n' | grep -cE '^[A-Za-z]+Available=True$' || true)
+    if [[ -z "$pending" && "$reconciled" == "True" && "${components:-0}" -ge 5 ]]; then break; fi
+    if [[ -z "$pending" ]]; then
+      pending="reconciling, ${components:-0} components up"
+    fi
   else
     pending=$(printf '%s\n' "$conds" | tr ' ' '\n' | grep '=False$' \
                 | sed 's/=False//' | paste -sd, - || true)
@@ -84,13 +78,12 @@ else
   kubectl get cneinstance f5-bnk-instance -n "$NS_BNK" \
     -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.message}{"\n"}{end}' 2>/dev/null \
     | grep -v '=True' | sed 's/^/        /' || true
-  # a workload short of its desired replicas is usually the cause
-  kubectl get sts,deploy -n "$NS_BNK" -o json 2>/dev/null | python3 -c '
-import json,sys
-try: d=json.load(sys.stdin)
-except Exception: sys.exit(0)
-for i in d.get("items",[]):
-    want=i["spec"].get("replicas",1); got=i.get("status",{}).get("readyReplicas",0)
-    if got!=want: print(f"        {i[\"kind\"]}/{i[\"metadata\"][\"name\"]}: {got}/{want} ready")
-' || true
+  # A workload short of its desired replicas is usually the cause. Printed with awk rather than
+  # python, because nesting escaped quotes inside a heredoc inside a shell string is how the
+  # previous version of this became a SyntaxError that only surfaced when it finally ran.
+  kubectl get sts,deploy -n "$NS_BNK" \
+    -o 'custom-columns=KIND:.kind,NAME:.metadata.name,WANT:.spec.replicas,READY:.status.readyReplicas' \
+    --no-headers 2>/dev/null \
+    | awk '{ ready = ($4 == "<none>" ? 0 : $4); if (ready != $3) printf "        %s/%s: %s/%s ready\n", $1, $2, ready, $3 }' \
+    || true
 fi
