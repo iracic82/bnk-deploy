@@ -108,6 +108,12 @@ else
   sudo ./svc.sh status | head -5
 fi
 
+if [[ "$NO_SERVICE" == "1" ]]; then
+  stop_hint="pkill -f '${RUNNER_DIR}/bin/Runner.Listener'"
+else
+  stop_hint="sudo ./svc.sh stop && sudo ./svc.sh uninstall"
+fi
+
 cat <<DONE
 
 Runner registered with labels: ${LABELS}
@@ -123,6 +129,6 @@ because those are F5 credentials rather than cluster ones.
 
 To remove it later:
   cd ${RUNNER_DIR}
-  $([[ "$NO_SERVICE" == "1" ]] && echo 'pkill -f "$RUNNER_DIR/bin/Runner.Listener"' || echo 'sudo ./svc.sh stop && sudo ./svc.sh uninstall')
+  ${stop_hint}
   ./config.sh remove --token <a fresh registration token>
 DONE
