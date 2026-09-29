@@ -64,6 +64,14 @@ jobs:
           raise SystemExit(1 if fail else 0)
           PY
 
+      - name: cluster inventory is valid and every selector resolves
+        run: |
+          pip install --quiet pyyaml
+          for sel in all env:lab env:demo env:staging env:production profile:host profile:dpu runner:beside runner:hub; do
+            SELECT=$sel python3 .github/scripts/plan_clusters.py >/dev/null || exit 1
+          done
+          echo "inventory valid, all selectors resolve"
+
       - name: fleet and site files parse
         run: python3 -c "import yaml;[yaml.safe_load(open(f)) and print('ok',f) for f in ['fleet/runners.yaml','bootstrap/site.yml']]"
 

@@ -1,0 +1,19 @@
+# A cluster with no runner of its own, driven from a hub runner that holds its kubeconfig.
+name: example-hub-managed
+description: Template. Copy, rename, and set enabled true.
+
+runner: hub
+runner_label: bnk-hub       # the shared hub runner
+
+environment: demo
+profile: host
+
+# With runner: hub the hub holds one merged kubeconfig, secret HUB_KUBECONFIGS, containing a
+# context per cluster. Dynamic secret names are not possible in Actions, so one merged file with
+# named contexts is both simpler and the usual practice.
+kube_context: example-hub-managed
+
+storage_class: standard
+pod_cidr: 192.168.0.0/16
+
+enabled: false

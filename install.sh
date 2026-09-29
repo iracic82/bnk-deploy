@@ -11,6 +11,7 @@
 #   ./install.sh --env lab --phase 70          run one phase
 #   ./install.sh --env demo --dry-run          validate server side, change nothing
 #   ./install.sh --env lab --skip-license      install unlicensed
+#   ./install.sh --env demo --context prod-eu  select a kubectl context, for a hub runner
 #
 # Environment files live in environments/. Version pins live in versions.env. Neither holds
 # secrets. Secrets come from the process environment only:
@@ -20,7 +21,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-BNK_ENV=""; PROFILE_OVERRIDE=""; ONLY_PHASE=""; SKIP_LICENSE=0; DRY_RUN=0
+BNK_ENV=""; PROFILE_OVERRIDE=""; ONLY_PHASE=""; SKIP_LICENSE=0; DRY_RUN=0; KUBE_CONTEXT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --env) BNK_ENV="$2"; shift 2 ;;
@@ -28,6 +29,7 @@ while [[ $# -gt 0 ]]; do
     --phase) ONLY_PHASE="$2"; shift 2 ;;
     --skip-license) SKIP_LICENSE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
+    --context) KUBE_CONTEXT="$2"; shift 2 ;;
     --list-env) ls -1 "$HERE/environments" | grep -vE '\..*\.env$' | sed 's/\.env$//'; exit 0 ;;
     --list-profile) ls -1 "$HERE/profiles"/*.env | xargs -n1 basename | sed 's/\.env$//'; exit 0 ;;
     -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
@@ -73,6 +75,13 @@ export BNK_NEEDS_HUGEPAGES BNK_NEEDS_SRIOV
 export BNK_REQUIRE_LICENSE="${BNK_REQUIRE_LICENSE:-true}"
 export BNK_STRICT_PREFLIGHT="${BNK_STRICT_PREFLIGHT:-false}"
 export BNK_WAIT_TIMEOUT="${BNK_WAIT_TIMEOUT:-900}"
+
+# A hub runner holds kubeconfigs for several clusters, so it has to say which one it means.
+# Setting it here rather than per kubectl call means every phase and every lib inherits it.
+if [[ -n "$KUBE_CONTEXT" ]]; then
+  kubectl config use-context "$KUBE_CONTEXT" >/dev/null 2>&1 \
+    || { echo "no kubectl context named $KUBE_CONTEXT"; exit 2; }
+fi
 
 log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 ok()   { printf '    \033[0;32mok\033[0m  %s\n' "$*"; }

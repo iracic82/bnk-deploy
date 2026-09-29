@@ -1,0 +1,15 @@
+# A cluster reachable only from its own host. The runner lives there.
+name: puget-lab
+description: Local kind cluster for development and dry runs.
+
+runner: beside              # beside | hub
+runner_label: puget-lab     # the self hosted runner label
+
+environment: lab            # lab | demo | staging | production
+profile: host               # host | dpu
+
+kube_context: kind-bnk-multi
+storage_class: standard
+pod_cidr: 192.168.0.0/16
+
+enabled: true               # the dispatcher skips anything not enabled

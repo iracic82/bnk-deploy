@@ -5,6 +5,24 @@ name: deploy
 # never apply without having just seen what it would do.
 
 on:
+  # Callable by the dispatcher so a fleet wide run reuses exactly this job, rather than a second
+  # implementation that can drift from it.
+  workflow_call:
+    inputs:
+      runner_label:   { type: string, required: true }
+      environment:    { type: string, required: true }
+      profile:        { type: string, required: true }
+      action:         { type: string, required: false, default: apply }
+      skip_license:   { type: boolean, required: false, default: false }
+      cluster_name:   { type: string, required: false, default: "" }
+      kube_context:   { type: string, required: false, default: "" }
+      storage_class:  { type: string, required: false, default: "" }
+      pod_cidr:       { type: string, required: false, default: "" }
+    secrets:
+      FAR_PULL_B64:     { required: true }
+      BNK_LICENSE_JWT:  { required: false }
+      HUB_KUBECONFIGS:  { required: false }
+
   workflow_dispatch:
     inputs:
       runner_label:
@@ -26,7 +44,7 @@ on:
         required: true
         default: apply
         type: choice
-        options: [apply, uninstall]
+        options: [apply, uninstall, plan-only, verify]
       skip_license:
         description: "Install unlicensed. Refused by demo, staging and production."
         type: boolean
@@ -36,8 +54,9 @@ permissions:
   contents: read
 
 concurrency:
-  # never two installs against the same cluster at once
-  group: bnk-${{ inputs.runner_label }}
+  # Never two installs against the same cluster at once. Keyed on the cluster rather than the
+  # runner, because a hub runner drives several clusters and they can safely proceed in parallel.
+  group: bnk-${{ inputs.cluster_name || inputs.runner_label }}
   cancel-in-progress: false
 
 jobs:
@@ -48,14 +67,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Hub runners hold one merged kubeconfig with a context per cluster. Runners that sit beside
+      # their cluster already have access and need none of this.
+      - name: select the cluster
+        env:
+          HUB_KUBECONFIGS: ${{ secrets.HUB_KUBECONFIGS }}
+          CTX: ${{ inputs.kube_context }}
+        run: |
+          if [ -n "$HUB_KUBECONFIGS" ]; then
+            [ -n "$CTX" ] || { echo "hub runner needs kube_context set for this cluster"; exit 1; }
+            mkdir -p "$RUNNER_TEMP/kube"
+            printf '%s' "$HUB_KUBECONFIGS" | base64 -d > "$RUNNER_TEMP/kube/config"
+            chmod 600 "$RUNNER_TEMP/kube/config"
+            echo "KUBECONFIG=$RUNNER_TEMP/kube/config" >> "$GITHUB_ENV"
+            echo "using the hub kubeconfig, context $CTX"
+          else
+            echo "runner sits beside its cluster, using its own kubectl access"
+          fi
+          echo "CTX_ARG=${CTX:+--context $CTX}" >> "$GITHUB_ENV"
+
       - name: show what we are about to do
         run: |
+          echo "cluster  ${{ inputs.cluster_name || 'unnamed' }}"
           echo "runner   ${{ inputs.runner_label }}"
           echo "env      ${{ inputs.environment }}"
           echo "profile  ${{ inputs.profile }}"
           echo "action   ${{ inputs.action }}"
-          echo "cluster  $(kubectl config current-context)"
-          kubectl get nodes -o wide
+          kubectl ${CTX_ARG} config current-context
+          kubectl ${CTX_ARG} get nodes -o wide
 
       - name: credentials
         env:
@@ -69,16 +108,26 @@ jobs:
         if: inputs.action == 'apply'
         env:
           FAR_PULL_JSON: ${{ runner.temp }}/far.json
-        run: ./install.sh --env ${{ inputs.environment }} --profile ${{ inputs.profile }} --dry-run --skip-license
+        run: |
+          ./install.sh --env ${{ inputs.environment }} --profile ${{ inputs.profile }} \
+            ${CTX_ARG} --dry-run --skip-license
 
       - name: apply
         if: inputs.action == 'apply'
         env:
           FAR_PULL_JSON: ${{ runner.temp }}/far.json
           BNK_LICENSE_JWT: ${{ secrets.BNK_LICENSE_JWT }}
+          BNK_STORAGECLASS: ${{ inputs.storage_class }}
+          BNK_POD_CIDR: ${{ inputs.pod_cidr }}
         run: |
           ./install.sh --env ${{ inputs.environment }} --profile ${{ inputs.profile }} \
-            ${{ inputs.skip_license && '--skip-license' || '' }}
+            ${CTX_ARG} ${{ inputs.skip_license && '--skip-license' || '' }}
+
+      - name: verify only
+        if: inputs.action == 'verify'
+        env:
+          FAR_PULL_JSON: ${{ runner.temp }}/far.json
+        run: ./install.sh --env ${{ inputs.environment }} ${CTX_ARG} --phase 70
 
       - name: uninstall
         if: inputs.action == 'uninstall'
@@ -93,4 +142,4 @@ jobs:
 
       - name: wipe credentials
         if: always()
-        run: rm -f "$RUNNER_TEMP/far.json"
+        run: rm -rf "$RUNNER_TEMP/far.json" "$RUNNER_TEMP/kube"

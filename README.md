@@ -125,6 +125,64 @@ Installing is never triggered by a merge. That is deliberate.
 
 ---
 
+## Many clusters
+
+Add a file to [`clusters/`](clusters/) and the cluster is in the fleet. That is the whole
+onboarding step, so it happens in a pull request rather than in someone's head.
+
+```mermaid
+flowchart TB
+    INV["<b>clusters/*.yaml</b><br/>the inventory"]
+    PLAN["<b>plan</b><br/>selector to matrix<br/>all · env:production · profile:dpu<br/>name:one · runner:hub"]
+    GATE{"apply to more<br/>than one cluster?"}
+    DEP["<b>deploy.yml</b><br/>one job per cluster<br/>max-parallel 3, fail-fast off"]
+
+    INV --> PLAN --> GATE
+    GATE -->|"no, or the repo variable<br/>BNK_FLEET_APPLY_ENABLED is true"| DEP
+    GATE -->|"yes and not enabled"| STOP["refused, plan only"]
+
+    DEP --> R1["runner <b>beside</b><br/>on the cluster host<br/>no kubeconfig anywhere"]
+    DEP --> R2["runner <b>hub</b><br/>one merged kubeconfig<br/>selected by context"]
+    R1 --> C1["cluster A"]
+    R2 --> C2["cluster B"]
+    R2 --> C3["cluster C"]
+
+    style INV stroke-width:2px
+    style STOP stroke-dasharray: 5 4
+```
+
+### Two runner topologies, choose per cluster
+
+**`runner: beside`** puts a self hosted runner on the cluster's own host. It already has kubectl
+access, so no kubeconfig is stored anywhere and nothing reaches inbound. Right for production and
+for anything behind a firewall.
+
+**`runner: hub`** uses one runner holding a single merged kubeconfig with a context per cluster,
+selected with `--context`. Fewer runners to look after, and it reaches clusters you cannot put a
+runner on. The trade is that the hub can reach every cluster in its kubeconfig, so treat it
+accordingly. Dynamic secret names are not possible in Actions, which is why it is one merged file
+rather than a secret per cluster.
+
+Mix both in one fleet. The dispatcher reads `runner` from each file and addresses accordingly.
+
+### Running it
+
+```
+Actions -> dispatch -> Run workflow
+  select: all              action: plan     # always safe, dry run on every selected cluster
+  select: env:production   action: apply    # needs BNK_FLEET_APPLY_ENABLED
+  select: name:tokyo-dpu   action: apply    # single cluster, no gate needed
+  select: all              action: verify   # phase 70 across the fleet
+```
+
+`plan` is a server side dry run and changes nothing. An `apply` touching more than one cluster is
+refused unless the repository variable `BNK_FLEET_APPLY_ENABLED` is `true`, so the worst an
+accidental run can do is plan. Single cluster applies do not need the gate.
+
+There is deliberately **no schedule** on `dispatch`. A traffic generator can sensibly run on a
+cron. Installing a data plane cannot, so every apply is a human pressing the button. The only
+scheduled thing here is `cluster-check`, which verifies and never changes.
+
 ## Workflows
 
 | Workflow | Trigger | Runs on | Does |

@@ -1,0 +1,95 @@
+name: dispatch
+
+# Fleet wide operations. Reads the cluster inventory in clusters/, selects a subset, and fans out
+# to deploy.yml so a fleet run reuses exactly the same job as a single cluster run.
+#
+# Deliberately NOT on a schedule. A traffic generator can sensibly run on a cron. Installing a data
+# plane cannot, so every apply here is a human pressing the button.
+#
+# SAFETY: an apply across more than one cluster is gated on the repository variable
+# BNK_FLEET_APPLY_ENABLED being 'true'. It is unset by default, so the worst an accidental run can
+# do is plan.
+
+on:
+  workflow_dispatch:
+    inputs:
+      select:
+        description: "Which clusters. all | env:production | profile:dpu | name:tokyo-dpu | runner:hub"
+        required: true
+        default: "all"
+      action:
+        description: "plan is always safe. apply across a fleet needs BNK_FLEET_APPLY_ENABLED=true."
+        required: true
+        default: "plan"
+        type: choice
+        options: [plan, apply, verify]
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet pyyaml
+      - id: plan
+        env:
+          SELECT: ${{ inputs.select }}
+        run: python3 .github/scripts/plan_clusters.py
+
+      - name: refuse a fleet apply unless it is explicitly enabled
+        if: inputs.action == 'apply'
+        env:
+          ENABLED: ${{ vars.BNK_FLEET_APPLY_ENABLED }}
+          COUNT: ${{ steps.plan.outputs.count }}
+        run: |
+          if [ "$COUNT" -gt 1 ] && [ "$ENABLED" != "true" ]; then
+            echo "This would apply to $COUNT clusters."
+            echo "Set the repository variable BNK_FLEET_APPLY_ENABLED to true first, or narrow the"
+            echo "selector to a single cluster with name:<cluster>."
+            exit 1
+          fi
+          echo "fleet apply permitted for $COUNT cluster(s)"
+
+      - name: summary
+        env:
+          COUNT: ${{ steps.plan.outputs.count }}
+        run: |
+          {
+            echo "### Selected $COUNT cluster(s)"
+            echo
+            echo "selector \`${{ inputs.select }}\`, action \`${{ inputs.action }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  run:
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    strategy:
+      # one cluster failing must not stop the rest of the fleet
+      fail-fast: false
+      # a small cap so a fleet run does not saturate the runners or the registry
+      max-parallel: 3
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    uses: ./.github/workflows/deploy.yml
+    with:
+      cluster_name: ${{ matrix.name }}
+      runner_label: ${{ matrix.runner_label }}
+      environment: ${{ matrix.environment }}
+      profile: ${{ matrix.profile }}
+      kube_context: ${{ matrix.kube_context }}
+      storage_class: ${{ matrix.storage_class }}
+      pod_cidr: ${{ matrix.pod_cidr }}
+      # plan maps to a dry run inside deploy.yml, which always plans before it applies
+      action: ${{ inputs.action == 'apply' && 'apply' || 'plan-only' }}
+    secrets:
+      FAR_PULL_B64: ${{ secrets.FAR_PULL_B64 }}
+      BNK_LICENSE_JWT: ${{ secrets.BNK_LICENSE_JWT }}
+      HUB_KUBECONFIGS: ${{ secrets.HUB_KUBECONFIGS }}
