@@ -67,6 +67,36 @@ jobs:
       - name: fleet and site files parse
         run: python3 -c "import yaml;[yaml.safe_load(open(f)) and print('ok',f) for f in ['fleet/runners.yaml','bootstrap/site.yml']]"
 
+      - name: mermaid diagrams in the docs actually parse
+        run: |
+          npm install --silent --no-save mermaid jsdom
+          python3 - <<'EX'
+          import re, pathlib
+          out = pathlib.Path('/tmp/mmd'); out.mkdir(exist_ok=True)
+          n = 0
+          for md in pathlib.Path('.').rglob('*.md'):
+              for i, b in enumerate(re.findall(r'```mermaid\n(.*?)```', md.read_text(), re.S), 1):
+                  n += 1
+                  (out / f'{md.as_posix().replace("/", "_")}.{i}.mmd').write_text(b)
+          print(f'extracted {n} diagram(s)')
+          EX
+          cat > /tmp/parse.mjs <<'EX'
+          import { JSDOM } from 'jsdom';
+          import { readFileSync, readdirSync } from 'node:fs';
+          const dom = new JSDOM('<!doctype html><body></body>', { pretendToBeVisual: true });
+          globalThis.window = dom.window; globalThis.document = dom.window.document;
+          Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, configurable: true });
+          const mermaid = (await import('mermaid')).default;
+          mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
+          let bad = 0;
+          for (const f of readdirSync('/tmp/mmd').sort()) {
+            try { await mermaid.parse(readFileSync(`/tmp/mmd/${f}`, 'utf8')); console.log(`ok   ${f}`); }
+            catch (e) { bad++; console.log(`FAIL ${f}: ${String(e.message || e).split('\n')[0]}`); }
+          }
+          process.exit(bad ? 1 : 0);
+          EX
+          node /tmp/parse.mjs
+
       - name: no secret shaped values committed
         run: |
           if grep -rInE '(eyJ[A-Za-z0-9_-]{20,}|BEGIN (RSA|EC|OPENSSH) PRIVATE KEY)' . --exclude-dir=.git; then

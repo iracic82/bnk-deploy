@@ -7,13 +7,14 @@ middle. This turns it into something you run, review in a pull request, and repe
 
 Two paths. Pick by what you already have.
 
-```
-Do you already have a working Kubernetes cluster with Calico?
-│
-├── yes ──> ./install.sh                host or dpu profile, any environment
-│
-└── no, bare metal with BlueField DPUs
-           └──> ./dpubnkctl/run.sh      provisions nodes, flashes DPUs, builds the cluster
+```mermaid
+flowchart LR
+    Q{"Working Kubernetes<br/>cluster with Calico?"}
+    Q -->|yes| I["<b>./install.sh</b><br/>host or dpu profile<br/>any environment"]
+    Q -->|"no, bare metal<br/>with BlueField DPUs"| B["<b>./dpubnkctl/run.sh</b><br/>flashes DPUs, provisions nodes,<br/>builds the cluster, installs BNK"]
+    B -.->|"cluster now exists"| I
+    style I stroke-width:2px
+    style B stroke-width:2px
 ```
 
 ---
@@ -79,6 +80,40 @@ There is deliberately no `KUBECONFIG` secret. The runner already has cluster acc
 
 ### 4. Day to day
 
+```mermaid
+flowchart TB
+    subgraph GH["GitHub"]
+        direction TB
+        PR["Pull request"]
+        VAL["<b>validate</b><br/>hosted runner<br/>lint · renders all 8 combos"]
+        E2E["<b>e2e-kind</b><br/>hosted runner<br/>throwaway cluster, install twice"]
+        DISP["<b>deploy</b><br/>manual dispatch"]
+        APR{"Environment<br/>approval"}
+    end
+
+    subgraph SITE["Your network, nothing inbound"]
+        direction TB
+        RUN["<b>self hosted runner</b><br/>on the cluster host"]
+        K8S["Kubernetes cluster<br/>+ BNK"]
+    end
+
+    PR --> VAL
+    PR --> E2E
+    PR -->|plan| RUN
+    RUN -->|"server side dry run"| K8S
+    RUN -.->|"plan posted as<br/>a PR comment"| PR
+    DISP --> APR
+    APR -->|"staging, production<br/>need a reviewer"| RUN
+    RUN -->|apply| K8S
+
+    style RUN stroke-width:2px
+    style K8S stroke-width:2px
+```
+
+The runner lives beside the cluster, so nothing reaches into your network and no kubeconfig is
+ever a repository secret.
+
+
 | You do | What happens |
 |---|---|
 | Open a pull request | `validate` lints and renders every environment and profile combination. `plan` runs a server side dry run on the target host and **posts the result as a PR comment**. |
@@ -115,11 +150,15 @@ environment runs either, because a production site may be software only or fitte
 
 Configuration layers, later wins:
 
-```
-versions.env                       pinned component versions
-environments/<env>.env             policy: size, storage, strictness, timeouts, licence
-profiles/<profile>.env             model: dpu on/off, MTU, attachments
-environments/<env>.<profile>.env   optional, combinations that genuinely differ
+```mermaid
+flowchart LR
+    V["<b>versions.env</b><br/>pinned component versions<br/>shared by everything"]
+    E["<b>environments/&lt;env&gt;.env</b><br/>policy<br/>size · storage · strictness<br/>timeouts · licence"]
+    P["<b>profiles/&lt;profile&gt;.env</b><br/>deployment model<br/>dpu on/off · MTU · attachments"]
+    C["<b>environments/&lt;env&gt;.&lt;profile&gt;.env</b><br/>optional<br/>only combinations that differ"]
+    R["rendered<br/>CNEInstance"]
+    V --> E --> P --> C --> R
+    style R stroke-width:2px
 ```
 
 Full matrix in [INSTALLER.md](INSTALLER.md).
@@ -130,7 +169,34 @@ StorageClass stops the run instead of producing a cluster that half works.
 
 ---
 
-## What this knows that the install guide does not
+## The two gates that are not obvious
+
+Both were found by running it. Neither is in the install guide.
+
+```mermaid
+flowchart TB
+    NAD["Multus<br/>NetworkAttachmentDefinition CRD"]
+    FLO["F5 Lifecycle Operator"]
+    CNE["CNEInstance"]
+    CP["Control plane<br/>CWC · DSSM · RabbitMQ · IPAM<br/>AFM · Observer · OTEL · CSRC"]
+    TMM["TMM<br/>data plane"]
+    LIC["License<br/>state Active"]
+
+    NAD -->|"FLO crash loops without it,<br/>even for a host install<br/>that uses no attachments"| FLO
+    FLO --> CNE
+    CNE --> CP
+    CNE --> TMM
+    LIC -->|"f5-cne-controller logs<br/>'License is not enabled..<br/>skip Resource controllers'"| TMM
+
+    style NAD stroke-width:2px
+    style LIC stroke-width:2px
+    style TMM stroke-dasharray: 5 4
+```
+
+So an unlicensed install brings up everything in the control plane box and nothing in the data
+plane box, on any cluster, however it is configured. That is by design rather than a fault.
+
+## What else this knows that the install guide does not
 
 All five were found by running it, not by reading.
 
