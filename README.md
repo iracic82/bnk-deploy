@@ -408,8 +408,13 @@ Nothing sensitive is committed, and CI fails the build if anything credential sh
 | `HUB_KUBECONFIGS` | hub runners only | One merged kubeconfig with a context per cluster |
 | `FAR_AUTH_KEY_B64` | bare metal path | The FAR auth key, the format `dpubnkctl` expects |
 
-Store them per GitHub Environment so staging and production credentials are separate and gated by
-reviewers. Runners that sit beside their cluster need **no kubeconfig secret at all**.
+Store them **per GitHub Environment** so staging and production credentials are separate and gated
+by reviewers. Runners that sit beside their cluster need **no kubeconfig secret at all**.
+
+One exception worth knowing. `e2e-kind` builds a throwaway cluster on a hosted runner and declares
+no environment, so it can only read **repository** secrets. Set `FAR_PULL_B64` at repository level
+as well if you want that regression test to run, otherwise it fails at the credentials step with
+the secret empty. Everything that touches a real cluster reads environment secrets only.
 
 ---
 
