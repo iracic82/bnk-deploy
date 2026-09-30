@@ -1,7 +1,13 @@
 # Preflight. Fails fast on the things that silently break the install later.
 : "${FAR_PULL_JSON:?FAR_PULL_JSON must point at cne_pull_64.json}"
 [[ -r "$FAR_PULL_JSON" ]] || die "cannot read $FAR_PULL_JSON"
-for c in kubectl helm openssl base64 tar; do command -v "$c" >/dev/null || die "$c not on PATH"; done
+# make is here because F5's cert-gen chart drives openssl through a Makefile. On a machine without it
+# gen_cert.sh fails, and it fails in the worst possible way: the yaml files are still written, empty,
+# and kubectl applies them successfully. You end up with CWC licence secrets containing no certificate
+# and a licence that cannot validate, three phases later, with nothing pointing back here.
+for c in kubectl helm openssl base64 tar make; do
+  command -v "$c" >/dev/null || die "$c not on PATH"
+done
 ok "tooling present"
 
 # Decide the licence situation now rather than after phase 50 has spent its whole timeout.
