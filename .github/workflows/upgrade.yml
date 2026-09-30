@@ -1,0 +1,140 @@
+name: upgrade
+
+# Upgrade BNK on one cluster. Manual dispatch only, one cluster at a time, because an upgrade is not
+# something to fan out across a fleet in a single run.
+#
+# Approval comes from the GitHub Environment, so staging and production wait for a reviewer.
+#
+# The script plans, snapshots, upgrades, gates on health, and rolls back automatically if the gate
+# fails. See the Upgrades section of the README for what rollback cannot undo.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cluster:
+        description: "Cluster name from clusters/, one only"
+        required: true
+      to:
+        description: "Target manifestVersion. Must resolve in the registry"
+        required: true
+      action:
+        description: "plan shows what would happen. upgrade performs it. rollback restores a snapshot"
+        required: true
+        default: plan
+        type: choice
+        options: [plan, upgrade, rollback]
+      snapshot:
+        description: "rollback only: snapshot path, relative to the repository root"
+        required: false
+      no_rollback:
+        description: "upgrade only: leave a failed upgrade in place instead of rolling back"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # never two upgrades against the same cluster
+  group: bnk-upgrade-${{ inputs.cluster }}
+  cancel-in-progress: false
+
+jobs:
+  which:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet pyyaml
+      - id: plan
+        env:
+          SELECT: name:${{ inputs.cluster }}
+        run: python3 .github/scripts/plan_clusters.py
+      - name: exactly one cluster
+        env:
+          COUNT: ${{ steps.plan.outputs.count }}
+        run: |
+          [ "$COUNT" = "1" ] || { echo "expected exactly one cluster, got $COUNT"; exit 1; }
+
+  upgrade:
+    needs: which
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.which.outputs.matrix) }}
+    runs-on: [self-hosted, bnk, "${{ matrix.runner_label }}"]
+    environment: bnk-${{ matrix.environment }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: select the cluster
+        env:
+          HUB_KUBECONFIGS: ${{ secrets.HUB_KUBECONFIGS }}
+          CTX: ${{ matrix.kube_context }}
+        run: |
+          if [ "${{ matrix.runner }}" = "hub" ]; then
+            [ -n "$HUB_KUBECONFIGS" ] || { echo "hub cluster but HUB_KUBECONFIGS is not set"; exit 1; }
+            mkdir -p "$RUNNER_TEMP/kube"
+            printf '%s' "$HUB_KUBECONFIGS" | base64 -d > "$RUNNER_TEMP/kube/config"
+            chmod 600 "$RUNNER_TEMP/kube/config"
+            echo "KUBECONFIG=$RUNNER_TEMP/kube/config" >> "$GITHUB_ENV"
+          fi
+          echo "KUBE_CONTEXT=$CTX" >> "$GITHUB_ENV"
+
+      - name: credentials
+        env:
+          FAR_PULL_B64: ${{ secrets.FAR_PULL_B64 }}
+        run: |
+          printf '%s' "$FAR_PULL_B64" > "$RUNNER_TEMP/far.json"
+          chmod 600 "$RUNNER_TEMP/far.json"
+
+      - name: plan
+        if: inputs.action == 'plan' || inputs.action == 'upgrade'
+        env:
+          FAR_PULL_JSON: ${{ runner.temp }}/far.json
+        run: |
+          ./upgrade.sh --env "${{ matrix.environment }}" --profile "${{ matrix.profile }}" \
+            --to "${{ inputs.to }}" --dry-run
+
+      - name: upgrade
+        if: inputs.action == 'upgrade'
+        env:
+          FAR_PULL_JSON: ${{ runner.temp }}/far.json
+          BNK_LICENSE_JWT: ${{ secrets.BNK_LICENSE_JWT }}
+        run: |
+          ./upgrade.sh --env "${{ matrix.environment }}" --profile "${{ matrix.profile }}" \
+            --to "${{ inputs.to }}" ${{ inputs.no_rollback && '--no-rollback' || '' }}
+
+      - name: rollback
+        if: inputs.action == 'rollback'
+        env:
+          FAR_PULL_JSON: ${{ runner.temp }}/far.json
+        run: |
+          [ -n "${{ inputs.snapshot }}" ] || { echo "rollback needs a snapshot path"; exit 1; }
+          ./upgrade.sh --env "${{ matrix.environment }}" --profile "${{ matrix.profile }}" \
+            --rollback-to "${{ inputs.snapshot }}"
+
+      - name: keep the snapshot, it is the only way to roll back later
+        if: always() && inputs.action == 'upgrade'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bnk-upgrade-snapshot-${{ matrix.name }}-${{ github.run_id }}
+          path: snapshots/
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get cneinstance -A -o jsonpath='{range .items[*].status.conditions[*]}{.type}={.status} {.message}{"\n"}{end}' || true
+          helm history f5-lifecycle-operator -n f5-cne-core || true
+          kubectl get pods -A -o wide | grep -vE 'Running|Completed' || true
+
+      - name: wipe credentials
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/far.json" "$RUNNER_TEMP/kube"

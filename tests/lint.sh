@@ -24,7 +24,7 @@ fi
 # Only two suppressions, both justified. SC1090/SC1091 because lib/*.sh are sourced at runtime and
 # SC2034/SC2154/SC2148 because they are fragments that inherit their variables from install.sh.
 if shellcheck -s bash -e SC1090,SC1091 \
-     install.sh uninstall.sh bootstrap/*.sh dpubnkctl/*.sh dpubnkctl/post-scripts/*.sh tests/*.sh; then
+     install.sh uninstall.sh upgrade.sh bootstrap/*.sh dpubnkctl/*.sh dpubnkctl/post-scripts/*.sh tests/*.sh; then
   ok "standalone scripts"
 else bad "standalone scripts"; fi
 if shellcheck -s bash -e SC1090,SC1091,SC2034,SC2154,SC2148 lib/*.sh; then
@@ -32,7 +32,7 @@ if shellcheck -s bash -e SC1090,SC1091,SC2034,SC2154,SC2148 lib/*.sh; then
 else bad "sourced phase libraries"; fi
 
 step "bash syntax"
-for f in install.sh uninstall.sh bootstrap/*.sh dpubnkctl/*.sh dpubnkctl/post-scripts/*.sh lib/*.sh tests/*.sh; do
+for f in install.sh uninstall.sh upgrade.sh bootstrap/*.sh dpubnkctl/*.sh dpubnkctl/post-scripts/*.sh lib/*.sh tests/*.sh; do
   bash -n "$f" || bad "syntax $f"
 done
 ok "all scripts parse"

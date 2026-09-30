@@ -482,8 +482,8 @@ that the SR-IOV device plugin is present and tolerates it. Rendering, preflight 
 are tested. Flashing BlueField cards and creating scalable functions requires the hardware, and is
 what `dpubnkctl/run.sh` covers.
 
-**Not covered:** BNK upgrades, and `F5SPKVlan` self IP configuration. See
-[After Day 1](#after-day-1-operating-with-forge).
+**Not covered:** `F5SPKVlan` self IP configuration. Upgrades are implemented with known limits, see
+[Upgrades](#upgrades).
 
 **`e2e-kind` scope.** A GitHub hosted runner provides 4 vCPU and BNK requests approximately 17, so a
 full install cannot run there. The workflow covers phases 00 to 40 plus server side validation of the
@@ -506,6 +506,58 @@ planner only reads `clusters/*.yaml`, so redirecting it is a one line change.
 Nothing else in the repo contains topology. Addresses, interface names, bridge names and DPU counts
 all live in `dpubnkctl/env/<site>.env`, which is gitignored by default.
 
+## Upgrades
+
+```bash
+./upgrade.sh --env production --profile dpu --to <manifest-version>
+./upgrade.sh --env lab --to <manifest-version> --dry-run        # plan only
+./upgrade.sh --env lab --rollback-to snapshots/<file>           # roll back a previous upgrade
+./upgrade.sh --env lab --to <manifest-version> --no-rollback    # leave a failure in place
+```
+
+The sequence follows the documented FLO upgrade: `helm upgrade` the Lifecycle Operator, raise
+`manifestVersion` on the CNEInstance, then verify. A state snapshot is written before anything
+changes and kept afterwards, so a rollback can be run later rather than only at the moment of
+failure.
+
+### What it refuses to do
+
+**Upgrade an unhealthy cluster.** If `Available` is not True it stops. A pre-existing fault would
+otherwise look like upgrade damage, and the rollback target would be a broken state.
+
+**Accept a manifest version that does not exist.** The operator accepts an unresolvable
+`manifestVersion` without complaint: it is recorded, `Available` stays True, nothing degrades, and
+the upgrade appears to succeed while changing nothing, because no component needs to pull new charts.
+The target is therefore resolved against the registry before anything is touched.
+
+**Operate on a failed helm release.** A previously failed release blocks helm operations, so
+pre-checks require the release to be `deployed` and name the command to investigate.
+
+**Roll back across a one way data migration.** Some releases migrate data. Moving from 2.2.1 to 2.3.0
+converts `cpcl-config-cm` and `cpcl-key-cm` from ConfigMaps to Secrets because the new CWC requires
+Secrets. The snapshot records which shape was in use, and rollback refuses if it has changed, because
+rolling the operator back would leave components looking for a shape that no longer exists. Restore
+from backup in that case.
+
+### Known limits
+
+**Rollback on failure is not proven end to end.** The rollback mechanism works, verified by rolling a
+live cluster from helm revision 2 back to revision 1. What has not been demonstrated is the automatic
+rollback triggered by a failing upgrade, because no way to induce a realistic upgrade failure has been
+found. An unresolvable version is harmless and is now rejected up front.
+
+**Helm operations can race certificate rotation.** The operator chart renders
+`external-otelsvr-secret`, and the OTEL certificates create a cert-manager `Certificate` with the same
+`secretName` and `rotationPolicy: Always`. Both manage that secret, so a helm render that looks it up
+can land mid rotation and fail with `no Secret with the name ... found`. Helm operations retry on that
+specific error. A first rollback attempt failed this way and succeeded on retry.
+
+**Component versions are not asserted after an upgrade.** The health gate confirms the cluster is
+healthy, the operator has observed the new spec, and the spec carries the target. It does not check
+that individual component images moved.
+
+For upgrades where these limits matter, Forge's upgrade workflow is the supported path.
+
 ## After Day 1: operating with Forge
 
 This repository stops once BNK is installed and verified. Ongoing operation is
@@ -519,7 +571,7 @@ what a Day 1 installer should not try to reimplement.
 | Health of FLO, TMM, gateways and the data plane | Forge, BNK Health Dashboard |
 | Fleet health in one view | Forge, Multi-Cluster Fleet |
 | How traffic moves through gateways and routes | Forge, Traffic Flow Overview |
-| **BNK upgrades with pre-checks, health gates and rollback** | **Forge** |
+| BNK upgrades | either. `upgrade.sh` here, or Forge. See [Upgrades](#upgrades) for the limits of each |
 | Snapshot config, diff clusters, promote between them | Forge, Config Export/Import |
 | Pod logs, exec, events, metrics | Forge |
 | Node cordon, drain, uncordon | Forge |
@@ -543,10 +595,10 @@ Treat this repository as the record of **intent** and Forge as the view of **cur
 change to how a cluster is built belongs in a pull request here. An operational action on a running
 cluster belongs in Forge.
 
-Two consequences worth planning for. Forge can change resources this repository also manages, so
-`cluster-check` will report that as drift, which is correct and worth investigating rather than
-suppressing. And because upgrades are not implemented here, an upgrade performed in Forge leaves
-`versions.env` stale, so update the pins afterwards to keep a rebuild accurate.
+Two consequences to plan for. Forge can change resources this repository also manages, and
+`cluster-check` reports those changes as drift. Investigate rather than suppress them. And an upgrade
+performed in Forge leaves `versions.env` stale, so update the pins afterwards or a rebuild installs
+the previous version.
 
 ## Scope
 
