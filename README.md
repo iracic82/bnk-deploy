@@ -607,3 +607,12 @@ This installs and verifies BNK on Kubernetes. It does not do node provisioning, 
 installs, BlueField flashing, OVS bridges, kernel parameters and `kubeadm`, because those are
 imperative, need reboots and are not Kubernetes. Use the bare metal path for that, or your own
 configuration management. A cluster reconciler should not own a file on a node.
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). Use it, fork it, ship it inside your own tooling.
+
+BIG-IP Next for Kubernetes itself is F5 software under F5 licensing, and this repository neither
+includes nor relicenses any part of it. What is MIT here is the automation: the installer, the
+workflows, the inventory format and the docs. You still need your own F5 entitlement, registry
+credential and licence token to install anything.
