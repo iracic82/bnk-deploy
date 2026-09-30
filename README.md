@@ -2,9 +2,14 @@
 
 **Install and operate F5 BIG-IP Next for Kubernetes across a fleet of clusters, from git.**
 
-Built for teams running AI infrastructure at more than one site. If you operate GPU capacity across
-several clusters, regions or tenants, installing BNK by following a procedure on each one does not
-scale and does not stay consistent. This makes it declarative, repeatable and reviewable.
+Built for teams running AI infrastructure across more than one cluster. Installing BNK by following
+a procedure on each cluster does not scale and does not stay consistent. This makes Day 1 install
+declarative, repeatable and reviewable.
+
+**Scope: Day 1.** Install, reinstall and verify BNK across a fleet, driven from pull requests. For
+Day 2 operations, health dashboards, upgrades with rollback, config promotion and alerting, use
+[F5 BNK Forge](https://github.com/f5devcentral/bnk-forge). The two are designed to hand over, and
+[After Day 1](#after-day-1-operating-with-forge) covers the handover.
 
 ```mermaid
 flowchart LR
@@ -132,8 +137,6 @@ flowchart LR
     style PR stroke-width:2px
     style C stroke-width:2px
 ```
-
-Three properties worth knowing.
 
 Only the clusters a change **touched** are acted on, so editing one cluster never disturbs another,
 and editing the installer itself triggers no installs at all.
@@ -338,19 +341,20 @@ flowchart LR
 Later layers win. The combination file exists for cases like a production site on host mode, where
 jumbo frames are a DPU fabric concern and the MTU should stay at 1500 rather than inherit 9000.
 
-Two guardrails are worth knowing. Outside lab, `--skip-license` is an error, so nobody ships an
+Two guardrails. Outside lab, `--skip-license` is an error, so nobody ships an
 unlicensed demo by accident. In production every preflight warning is fatal, so a missing
 StorageClass stops the run instead of producing a cluster that half works.
 
 ---
 
-## The five traps this handles for you
+## Prerequisites the installer enforces
 
-All were found by running the install, not by reading about it. Each one costs real time if you
-meet it without warning.
+BNK has five prerequisites whose failure modes give no useful diagnostic. Each is checked before the
+step that depends on it, so the installer reports the cause rather than the symptom.
 
 ```mermaid
 flowchart TB
+    LBL["app=f5-tmm<br/>on at least one node"]
     NAD["Multus<br/>NetworkAttachmentDefinition CRD"]
     FLO["F5 Lifecycle Operator"]
     CNE["CNEInstance"]
@@ -358,49 +362,57 @@ flowchart TB
     TMM["TMM<br/>data plane"]
     LIC["License<br/>state Active"]
 
-    NAD -->|"FLO crash loops without it,<br/>even for a host install<br/>that uses no attachments"| FLO
+    NAD -->|"FLO will not start without it,<br/>even with no attachments in use"| FLO
     FLO --> CNE
     CNE --> CP
     CNE --> TMM
-    LIC -->|"the controller skips its<br/>resource controllers<br/>without a licence"| TMM
+    LBL -->|"no label, no DaemonSet"| TMM
+    LIC -->|"the controller skips its<br/>resource controllers without it"| TMM
 
+    style LBL stroke-width:2px
     style NAD stroke-width:2px
     style LIC stroke-width:2px
-    style TMM stroke-dasharray: 5 4
 ```
 
-**1. No node label, no data plane, and a stack trace instead of an explanation.** The host install
-path requires `kubectl label node <NODE> app=f5-tmm`, and the docs say plainly that without it
-nothing schedules TMM. What actually happens is that the Lifecycle Operator panics with
-`assignment to entry in nil map` at `f5tmm_daemonset.go:186`, recovers, requeues and panics again
-every few minutes, while every other component reports healthy. Verified on a real cluster: adding
-the label moved `f5tmm` from `Reconciled=Unknown` to `Reconciled=True` and the DaemonSet appeared
-in seconds. Preflight checks for the label, and also warns if a labelled node has no hugepages.
+### TMM node label
 
-**6. The operator will not start without the Multus CRD.** Even for a host install that uses no
-network attachments, the Lifecycle Operator crash loops on `if kind is a CRD, it should be
-installed before calling Start`. Nothing in the install guide mentions this, and the error does not
-point at Multus. Phase 10 installs Multus before phase 30 installs the operator, and phase 30
-restarts the operator if it finds it looping, so the ordering is self healing.
+At least one node must carry `app=f5-tmm`. Without it the Lifecycle Operator panics with
+`assignment to entry in nil map` at `f5tmm_daemonset.go:186`, recovers, requeues and repeats, while
+every other component reports healthy. The error names neither TMM nor the label.
 
-**2. Two component versions are discovered, not published.** The procedure has you grep the
-Lifecycle Operator and cert generation versions out of a release manifest at install time, which
-makes every run potentially different. They are resolved and pinned in `versions.env`.
+Declare the nodes in the cluster file and phase 05 applies or verifies them.
 
-**3. The certificate authority CommonName must differ from the leaf CommonNames.** If it does not,
-the licensing component crash loops on an x509 error that gives no hint why. The chain is built
-correctly and the result is asserted to actually be a CA rather than assumed.
+### Multus before the operator
 
-**4. Multus runs out of memory under BNK.** BNK creates enough pods to flood it with CNI requests
-and the default limit is not enough. Raised up front rather than left as a troubleshooting step
-after pods fail to start.
+The `NetworkAttachmentDefinition` CRD must exist before the Lifecycle Operator starts, including on
+host installs that use no attachments. Absent, the operator crash loops on `if kind is a CRD, it
+should be installed before calling Start`. Phase 10 installs Multus, phase 30 installs the operator,
+and phase 30 restarts it if it finds it looping.
 
-**5. An unlicensed install has no data plane, by design.** Without a licence the controller logs
-`License is not enabled.. skip Resource controllers` and never creates TMM. The whole control plane
-comes up and the data plane does not. Verification reports that as expected rather than as a fault,
-so you are not left hunting a problem that is not there.
+### Certificate authority CommonName
 
----
+The issuing CA's CommonName must differ from the leaf CommonNames, or the licensing component crash
+loops on an x509 error that does not explain why. Phase 10 builds the chain correctly and asserts the
+result is a CA rather than assuming it.
+
+### Multus memory limit
+
+BNK generates enough pods to exhaust Multus at its default memory limit, which presents as pods stuck
+in `ContainerCreating`. Phase 10 raises it to 512Mi during installation.
+
+### Licence gating the data plane
+
+Without an active licence the controller logs `License is not enabled.. skip Resource controllers`
+and never creates TMM. The control plane comes up and the data plane does not. Phase 00 resolves the
+licence question before anything else runs, and verification reports an unlicensed install as
+expected rather than as a fault.
+
+### Version resolution
+
+Two component versions are not published in the documentation and must be extracted from the release
+manifest at install time, which makes unpinned runs irreproducible. They are resolved and pinned in
+`versions.env` as `f5-lifecycle-operator v2.21.13-0.0.28` and `f5-cert-gen 0.9.3`, from release
+manifest `2.3.0-3.2598.3-0.0.170`.
 
 ## Run summaries
 
@@ -445,44 +457,38 @@ Nothing sensitive is committed, and CI fails the build if anything credential sh
 Store them **per GitHub Environment** so staging and production credentials are separate and gated
 by reviewers. Runners that sit beside their cluster need **no kubeconfig secret at all**.
 
-One exception worth knowing. `e2e-kind` builds a throwaway cluster on a hosted runner and declares
+`e2e-kind` builds a throwaway cluster on a hosted runner and declares
 no environment, so it can only read **repository** secrets. Set `FAR_PULL_B64` at repository level
 as well if you want that regression test to run, otherwise it fails at the credentials step with
 the secret empty. Everything that touches a real cluster reads environment secrets only.
 
 ---
 
-## Validation status
+## Tested configurations
 
-Honest about what has and has not been proven, because a deployment tool that overstates its
-testing is worse than one that says nothing.
+| | |
+|---|---|
+| Cluster | Kubernetes 1.30, three nodes, Calico v3.29.1 |
+| Profile | host |
+| Licence | connected mode, reaches `Active` |
+| Result | `CNEInstance Available=True`, `F5TmmAvailable=True`, TMM 1/1 ready with `ConfigurationDone` and `RoutingDone` gates satisfied, 13 pods in `f5-cne-core` and 10 in `f5-bnk` |
+| Idempotency | a second full run changes nothing |
+| Rendering | all four environments against both profiles validate server side and render correctly differing objects |
+| Runner topologies | both `beside` and `hub` exercised, including a bad context failing rather than acting on the wrong cluster |
 
-**Verified** on a three node Kubernetes 1.30 cluster with Calico. Full install clean end to end,
-the operator running with 22 custom resource definitions registered, the control plane distributed
-across all three nodes with every container ready, and a second run a complete no op. All eight
-environment and profile combinations validate server side and render correctly differing objects.
-Both runner topologies exercised, including a context that does not exist failing rather than
-silently operating on the wrong cluster.
+**DPU mode** implements the cluster side of the documented Phase 5: the `app=f5-tmm` label, the
+`dpu=true:NoSchedule` taint on each DPU node, the Multus toleration for that taint, and verification
+that the SR-IOV device plugin is present and tolerates it. Rendering, preflight and node preparation
+are tested. Flashing BlueField cards and creating scalable functions requires the hardware, and is
+what `dpubnkctl/run.sh` covers.
 
-**A licensed install is verified.** The licence reaches `Active` in connected mode, the operator
-then creates the TMM DaemonSet, and TMM comes up with both readiness gates satisfied,
-`ConfigurationDone` and `RoutingDone`. Final state on a three node cluster: `CNEInstance
-Available=True`, `F5TmmAvailable=True`, TMM 1/1 ready, 13 pods in `f5-cne-core` and 10 in `f5-bnk`.
+**Not covered:** BNK upgrades, and `F5SPKVlan` self IP configuration. See
+[After Day 1](#after-day-1-operating-with-forge).
 
-**DPU mode** is implemented to the documented Phase 5 requirements: the `app=f5-tmm` label, the
-`dpu=true:NoSchedule` taint on every DPU node, the Multus toleration for that taint so the CNI can
-still run there, and a check that the SR-IOV device plugin is present and tolerates it. Rendering,
-preflight and node preparation are validated. Actually flashing a BlueField and creating scalable
-functions needs real hardware, and that is what `dpubnkctl/run.sh` is for.
-
-**Why `e2e-kind` stops short of a full install.** A GitHub hosted runner has 4 vCPU and BNK requests
-around 17, so the pods sit Pending with `Insufficient cpu`. No configuration changes that. So it
-covers the parts most likely to regress, meaning preflight, the Multus before FLO ordering, the
-certificate authority chain, registry access, the pinned versions, and that a rendered CNEInstance
-is accepted by a real API server. Installing the data plane is proven on a real cluster by the
-`plan` and `apply` workflows instead.
-
----
+**`e2e-kind` scope.** A GitHub hosted runner provides 4 vCPU and BNK requests approximately 17, so a
+full install cannot run there. The workflow covers phases 00 to 40 plus server side validation of the
+CNEInstance, twice, to prove idempotency. Data plane installation is exercised against a real cluster
+by `plan` and `apply`.
 
 ## Keeping your inventory private
 
@@ -500,9 +506,51 @@ planner only reads `clusters/*.yaml`, so redirecting it is a one line change.
 Nothing else in the repo contains topology. Addresses, interface names, bridge names and DPU counts
 all live in `dpubnkctl/env/<site>.env`, which is gitignored by default.
 
+## After Day 1: operating with Forge
+
+This repository stops once BNK is installed and verified. Ongoing operation is
+[F5 BNK Forge](https://github.com/f5devcentral/bnk-forge), which is F5's supported tool and covers
+what a Day 1 installer should not try to reimplement.
+
+| Need | Use |
+|---|---|
+| Install, reinstall, verify across a fleet | this repository |
+| Add or change a cluster with review and approval | this repository, via pull request |
+| Health of FLO, TMM, gateways and the data plane | Forge, BNK Health Dashboard |
+| Fleet health in one view | Forge, Multi-Cluster Fleet |
+| How traffic moves through gateways and routes | Forge, Traffic Flow Overview |
+| **BNK upgrades with pre-checks, health gates and rollback** | **Forge** |
+| Snapshot config, diff clusters, promote between them | Forge, Config Export/Import |
+| Pod logs, exec, events, metrics | Forge |
+| Node cordon, drain, uncordon | Forge |
+| Slack, Teams or webhook alerting | Forge |
+| Role separation beyond approve or do not approve | Forge, RBAC across its API |
+
+### Handing a cluster over
+
+Forge connects to clusters by kubeconfig, so a cluster installed here needs no preparation beyond
+being reachable. After `apply` reports success:
+
+1. Confirm the install is complete. `./install.sh --env <env> --phase 70` must pass, with `licence
+   Active` and `CNEInstance Available`.
+2. Add the cluster to Forge and let it discover the deployment.
+3. Keep the cluster file in `clusters/` as the record of how the cluster was built. It stays the
+   source of truth for a rebuild.
+
+### Which tool owns what
+
+Treat this repository as the record of **intent** and Forge as the view of **current state**. A
+change to how a cluster is built belongs in a pull request here. An operational action on a running
+cluster belongs in Forge.
+
+Two consequences worth planning for. Forge can change resources this repository also manages, so
+`cluster-check` will report that as drift, which is correct and worth investigating rather than
+suppressing. And because upgrades are not implemented here, an upgrade performed in Forge leaves
+`versions.env` stale, so update the pins afterwards to keep a rebuild accurate.
+
 ## Scope
 
-This installs and operates BNK on Kubernetes. It does not do node provisioning, meaning DOCA
+This installs and verifies BNK on Kubernetes. It does not do node provisioning, meaning DOCA
 installs, BlueField flashing, OVS bridges, kernel parameters and `kubeadm`, because those are
 imperative, need reboots and are not Kubernetes. Use the bare metal path for that, or your own
 configuration management. A cluster reconciler should not own a file on a node.
