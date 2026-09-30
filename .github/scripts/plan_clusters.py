@@ -38,6 +38,11 @@ def load():
             sys.exit(f"{f}: runner must be one of {sorted(VALID_RUNNER)}")
         if d["profile"] not in VALID_PROFILE:
             sys.exit(f"{f}: profile must be one of {sorted(VALID_PROFILE)}")
+        tmm = d.get("tmm") or {}
+        if not isinstance(tmm, dict):
+            sys.exit(f"{f}: tmm must be a mapping with 'nodes' and optionally 'manage_labels'")
+        if tmm.get("manage_labels") and not tmm.get("nodes"):
+            sys.exit(f"{f}: tmm.manage_labels is true but tmm.nodes is empty, so there is nothing to label")
         if d["runner"] == "hub" and not d.get("kube_context"):
             sys.exit(f"{f}: runner is hub, so kube_context is required to pick it out of "
                      f"the merged kubeconfig")
@@ -93,14 +98,19 @@ def main():
             "kube_context": c.get("kube_context", "") or "",
             "storage_class": c.get("storage_class", "") or "",
             "pod_cidr": c.get("pod_cidr", "") or "",
+            # which nodes run TMM, and whether we may label them. Declared rather than discovered,
+            # so a cluster file says exactly where BNK lands.
+            "tmm_nodes": ",".join(c.get("tmm", {}).get("nodes", []) or []),
+            "tmm_manage_labels": str(bool(c.get("tmm", {}).get("manage_labels", False))).lower(),
         }
         for c in chosen
     ]
 
     print(f"{len(clusters)} cluster(s) in inventory, {len(matrix)} selected", file=sys.stderr)
     for m in matrix:
+        nodes = m["tmm_nodes"] or "none declared"
         print(f"  {m['name']:24} {m['environment']:11} {m['profile']:5} "
-              f"runner={m['runner']}:{m['runner_label']}", file=sys.stderr)
+              f"runner={m['runner']}:{m['runner_label']}  tmm={nodes}", file=sys.stderr)
 
     gh_out = os.environ.get("GITHUB_OUTPUT")
     payload = json.dumps(matrix)

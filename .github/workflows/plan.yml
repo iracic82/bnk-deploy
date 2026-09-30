@@ -103,6 +103,9 @@ jobs:
           FAR_PULL_JSON: ${{ runner.temp }}/far.json
           BNK_STORAGECLASS: ${{ matrix.storage_class }}
           BNK_POD_CIDR: ${{ matrix.pod_cidr }}
+          BNK_TMM_NODES: ${{ matrix.tmm_nodes }}
+          # a plan never changes a node, so labelling stays off regardless of the cluster file
+          BNK_TMM_MANAGE_LABELS: "false"
         run: |
           set -o pipefail
           ./install.sh --env "${{ matrix.environment }}" --profile "${{ matrix.profile }}" \

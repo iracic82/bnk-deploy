@@ -15,4 +15,10 @@ kube_context: prod-eu-west
 storage_class: nfs
 pod_cidr: 192.168.0.0/16
 
+# Two DPU nodes. With the dpu profile the installer also taints them dpu=true:NoSchedule, which the
+# DPU install path requires so only TMM and permitted system pods land on a DPU.
+tmm:
+  nodes: [dpu-1, dpu-2]
+  manage_labels: true
+
 enabled: false

@@ -19,4 +19,10 @@ kube_context: prod-us-east   # required for hub runners, picks this cluster out 
 storage_class: nfs
 pod_cidr: 192.168.0.0/16
 
+# manage_labels false means the installer verifies the label and refuses to proceed without it,
+# rather than changing nodes itself. Sensible where node configuration belongs to another team.
+tmm:
+  nodes: [worker-1]
+  manage_labels: false
+
 enabled: false

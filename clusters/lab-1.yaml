@@ -13,4 +13,10 @@ kube_context: kind-bnk-multi
 storage_class: standard
 pod_cidr: 192.168.0.0/16
 
+# Where BNK actually lands. Declared here so the cluster file answers "which nodes", rather than
+# leaving it to whoever ran kubectl last. This is the real node on the three node cluster.
+tmm:
+  nodes: [bnk-multi-worker]    # nodes to carry app=f5-tmm
+  manage_labels: true          # the installer applies the label rather than only verifying it
+
 enabled: true

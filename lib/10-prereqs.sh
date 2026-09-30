@@ -12,6 +12,20 @@ fi
 if kubectl -n kube-system get ds kube-multus-ds >/dev/null 2>&1; then
   kubectl -n kube-system set resources ds kube-multus-ds -c kube-multus --limits=memory="${MULTUS_MEMORY_LIMIT}" >/dev/null
   ok "Multus memory limit ${MULTUS_MEMORY_LIMIT} (default OOMKills under BNK CNI load)"
+
+  # The DPU path taints its nodes dpu=true:NoSchedule so only TMM and permitted system pods land
+  # there. Multus is one of the permitted ones, so it needs the toleration or it never runs on the
+  # DPU and TMM has no CNI. The docs patch it in the same way.
+  if [[ "${BNK_DPU_ENABLED:-false}" == "true" && "$DRY_RUN" == "0" ]]; then
+    if kubectl -n kube-system get ds kube-multus-ds \
+         -o jsonpath='{.spec.template.spec.tolerations[*].key}' 2>/dev/null | grep -q dpu; then
+      ok "Multus already tolerates the DPU taint"
+    else
+      kubectl -n kube-system patch ds kube-multus-ds --type=json -p='[{"op":"add","path":"/spec/template/spec/tolerations/-","value":{"key":"dpu","operator":"Equal","value":"true","effect":"NoSchedule"}}]' >/dev/null 2>&1 \
+        || kubectl -n kube-system patch ds kube-multus-ds --type=json -p='[{"op":"add","path":"/spec/template/spec/tolerations","value":[{"key":"dpu","operator":"Equal","value":"true","effect":"NoSchedule"}]}]' >/dev/null
+      ok "Multus patched to tolerate dpu=true:NoSchedule"
+    fi
+  fi
 fi
 
 # --- cert-manager ---
@@ -65,6 +79,18 @@ fi
 
 # --- SR-IOV device plugin, DPU profile only ---
 if [[ "$PROFILE" == "dpu" ]]; then
-  warn "DPU profile: install the SR-IOV device plugin ${SRIOV_DP_VERSION} and its ConfigMap,"
-  warn "and add a dpu=true:NoSchedule toleration. See profiles/dpu.yaml for the CNEInstance."
+  # The SR-IOV device plugin advertises the scalable functions to Kubernetes. Without it TMM cannot
+  # request nvidia.com/bf3_* and never schedules. It is node level work, so we verify rather than
+  # install it, and say exactly what is missing.
+  if kubectl -n kube-system get ds kube-sriov-device-plugin >/dev/null 2>&1; then
+    ok "SR-IOV device plugin present"
+    if kubectl -n kube-system get ds kube-sriov-device-plugin \
+         -o jsonpath='{.spec.template.spec.tolerations[*].key}' 2>/dev/null | grep -q dpu; then
+      ok "SR-IOV device plugin tolerates the DPU taint"
+    else
+      warn "SR-IOV device plugin does not tolerate dpu=true:NoSchedule, so it will not run on a tainted DPU node"
+    fi
+  else
+    warn "no SR-IOV device plugin. The DPU profile needs it to advertise scalable functions. Use dpubnkctl/run.sh if the nodes are not provisioned."
+  fi
 fi

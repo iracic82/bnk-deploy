@@ -71,24 +71,8 @@ fi
 kubectl get sc --no-headers 2>/dev/null | grep -q . || die "no StorageClass. BNK needs persistent volumes."
 ok "storageclass: $(kubectl get sc --no-headers | awk '$2!=""{print $1}' | head -1)"
 
-# The one prerequisite with no error message worth reading if you miss it. The install guide's host
-# path says plainly: "Label each node that you want TMM pods to run on. If no nodes are labeled, the
-# container-orchestration platform won't schedule any TMM pods."
-#
-# Skip it and FLO panics with "assignment to entry in nil map" at f5tmm_daemonset.go:186, which
-# names neither the label nor TMM. Verified on a real cluster: adding the label took f5tmm from
-# Reconciled=Unknown to Reconciled=True and the DaemonSet appeared within seconds.
-tmm_nodes=$(kubectl get nodes -l app=f5-tmm --no-headers 2>/dev/null | wc -l)
-if [[ "${tmm_nodes:-0}" -gt 0 ]]; then
-  ok "$tmm_nodes node(s) labelled app=f5-tmm"
-  # a labelled node with no hugepages cannot run TMM either, so check the ones that matter
-  for n in $(kubectl get nodes -l app=f5-tmm -o name 2>/dev/null | cut -d/ -f2); do
-    hp=$(kubectl get node "$n" -o jsonpath='{.status.allocatable.hugepages-2Mi}' 2>/dev/null)
-    case "${hp:-0}" in 0|"") warn "node $n is labelled for TMM but advertises no hugepages-2Mi" ;; esac
-  done
-else
-  warn "no node carries app=f5-tmm, so TMM will never be scheduled. Label one: kubectl label node <NODE> app=f5-tmm"
-fi
+# The TMM node label and the DPU taint are checked in phase 05, which also applies them when the
+# cluster file asks it to.
 
 # TMM requests hugepages-2Mi in every profile, and the operator keeps that request even if you
 # override advanced.tmm.resources to remove it. So this is mandatory wherever TMM will run.

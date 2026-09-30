@@ -54,6 +54,8 @@ jobs:
       kube_context: ${{ matrix.kube_context }}
       storage_class: ${{ matrix.storage_class }}
       pod_cidr: ${{ matrix.pod_cidr }}
+      tmm_nodes: ${{ matrix.tmm_nodes }}
+      tmm_manage_labels: ${{ matrix.tmm_manage_labels }}
       action: verify
     secrets:
       FAR_PULL_B64: ${{ secrets.FAR_PULL_B64 }}

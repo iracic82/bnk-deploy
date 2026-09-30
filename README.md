@@ -221,12 +221,26 @@ runner_label: prod-eu-west-1
 environment: production        # lab | demo | staging | production
 profile: dpu                   # host | dpu
 
-kube_context: prod-eu-west
+kube_context: prod-eu-west     # which cluster, by kubectl context
 storage_class: nfs
 pod_cidr: 192.168.0.0/16
 
+# Where BNK actually lands inside that cluster. TMM runs only on nodes carrying app=f5-tmm, so
+# naming them here is what makes the target explicit rather than dependent on who ran kubectl last.
+tmm:
+  nodes: [dpu-1, dpu-2]
+  manage_labels: true          # the installer applies the label, and for dpu also the taint
+
 enabled: true
 ```
+
+So a cluster file answers three questions: **which cluster** through `kube_context`, **which nodes
+inside it** through `tmm.nodes`, and **how** through `environment` and `profile`.
+
+`manage_labels: true` lets the installer label the nodes, and on the `dpu` profile also taint them
+`dpu=true:NoSchedule` as the DPU path requires. Set it `false` where node configuration belongs to
+another team, and the installer verifies instead and refuses to proceed if the label is missing. A
+plan never labels anything regardless of the setting.
 
 ```mermaid
 flowchart TB
@@ -455,8 +469,11 @@ then creates the TMM DaemonSet, and TMM comes up with both readiness gates satis
 `ConfigurationDone` and `RoutingDone`. Final state on a three node cluster: `CNEInstance
 Available=True`, `F5TmmAvailable=True`, TMM 1/1 ready, 13 pods in `f5-cne-core` and 10 in `f5-bnk`.
 
-**DPU mode** is validated as far as rendering and preflight. The node level work, flashing and
-scalable functions, needs real BlueField hardware to prove.
+**DPU mode** is implemented to the documented Phase 5 requirements: the `app=f5-tmm` label, the
+`dpu=true:NoSchedule` taint on every DPU node, the Multus toleration for that taint so the CNI can
+still run there, and a check that the SR-IOV device plugin is present and tolerates it. Rendering,
+preflight and node preparation are validated. Actually flashing a BlueField and creating scalable
+functions needs real hardware, and that is what `dpubnkctl/run.sh` is for.
 
 **Why `e2e-kind` stops short of a full install.** A GitHub hosted runner has 4 vCPU and BNK requests
 around 17, so the pods sit Pending with `Insufficient cpu`. No configuration changes that. So it

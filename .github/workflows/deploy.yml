@@ -18,6 +18,8 @@ on:
       kube_context:   { type: string, required: false, default: "" }
       storage_class:  { type: string, required: false, default: "" }
       pod_cidr:       { type: string, required: false, default: "" }
+      tmm_nodes:         { type: string, required: false, default: "" }
+      tmm_manage_labels: { type: string, required: false, default: "false" }
     secrets:
       FAR_PULL_B64:     { required: true }
       BNK_LICENSE_JWT:  { required: false }
@@ -121,6 +123,8 @@ jobs:
           BNK_LICENSE_JWT: ${{ secrets.BNK_LICENSE_JWT }}
           BNK_STORAGECLASS: ${{ inputs.storage_class }}
           BNK_POD_CIDR: ${{ inputs.pod_cidr }}
+          BNK_TMM_NODES: ${{ inputs.tmm_nodes }}
+          BNK_TMM_MANAGE_LABELS: ${{ inputs.tmm_manage_labels }}
         run: |
           ./install.sh --env ${{ inputs.environment }} --profile ${{ inputs.profile }} \
             ${{ inputs.skip_license && '--skip-license' || '' }}

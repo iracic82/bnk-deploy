@@ -91,6 +91,7 @@ export BNK_ENV_NAME BNK_DEPLOYMENT_SIZE BNK_STORAGECLASS BNK_POD_CIDR BNK_TMM_MT
 export BNK_DYNAMIC_ROUTING BNK_CORE_COLLECTION BNK_LICENSE_MODE
 export BNK_PROFILE_NAME BNK_DPU_ENABLED BNK_NETWORK_ATTACHMENTS BNK_ZEBOS_STATE
 export BNK_NEEDS_HUGEPAGES BNK_NEEDS_SRIOV
+export BNK_TMM_NODES="${BNK_TMM_NODES:-}" BNK_TMM_MANAGE_LABELS="${BNK_TMM_MANAGE_LABELS:-false}"
 export BNK_REQUIRE_LICENSE="${BNK_REQUIRE_LICENSE:-true}"
 export BNK_STRICT_PREFLIGHT="${BNK_STRICT_PREFLIGHT:-false}"
 export BNK_WAIT_TIMEOUT="${BNK_WAIT_TIMEOUT:-900}"
@@ -158,6 +159,7 @@ printf '\n\033[1m  BNK %s  env=%s  profile=%s  size=%s%s%s%s\033[0m\n' \
 
 PHASES=(
   "00-preflight:Preflight checks"
+  "05-nodes:Node preparation"
   "10-prereqs:Cluster prerequisites"
   "20-registry:Registry auth, namespaces, pull secrets"
   "30-flo:F5 Lifecycle Operator"

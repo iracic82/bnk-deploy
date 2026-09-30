@@ -87,6 +87,8 @@ jobs:
       kube_context: ${{ matrix.kube_context }}
       storage_class: ${{ matrix.storage_class }}
       pod_cidr: ${{ matrix.pod_cidr }}
+      tmm_nodes: ${{ matrix.tmm_nodes }}
+      tmm_manage_labels: ${{ matrix.tmm_manage_labels }}
       # plan maps to a dry run inside deploy.yml, which always plans before it applies
       action: ${{ inputs.action == 'apply' && 'apply' || 'plan-only' }}
     secrets:
