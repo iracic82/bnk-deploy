@@ -23,6 +23,27 @@ render_cneinstance() {
     calico_router=$'        - name: TMM_CALICO_ROUTER\n          value: default'
   fi
 
+  # Cluster scope. With product.gatewayAPI true the admission webhook insists wholeCluster and
+  # watchNamespaces agree: "Invalid product configuration, please check WholeCluster, WatchNamespaces and
+  # GatewayAPI settings". The CRD says watchNamespaces must be empty when wholeCluster is true.
+  #
+  # wholeCluster defaults to false in the CRD. Setting it true, which this repository used to do
+  # unconditionally, sends the lifecycle operator down cluster wide route programming, and that path
+  # panics. "Adding TMM TMM_K8S_ROUTES environment variables" is followed in the same millisecond by
+  # "Observed a panic: assignment to entry in nil map" at f5tmm_daemonset.go:186. The panic aborts the
+  # DaemonSet build, so on a fresh cluster TMM is never created and no status says why. An existing
+  # DaemonSet survives it, which is why a long lived cluster looks healthy.
+  #
+  # Naming the namespaces is therefore the working mode. Set BNK_WATCH_NAMESPACES to a comma separated
+  # list. Leave it empty for whole cluster mode, on a release where that panic is fixed.
+  local scope_block="  wholeCluster: true" ns
+  if [[ -n "${BNK_WATCH_NAMESPACES:-}" ]]; then
+    scope_block="  wholeCluster: false"$'\n'"  watchNamespaces:"
+    local -a _ns
+    IFS=',' read -ra _ns <<< "$BNK_WATCH_NAMESPACES"
+    for ns in "${_ns[@]}"; do scope_block+=$'\n'"    - ${ns}"; done
+  fi
+
   sed -e "s|__MANIFEST__|${CNE_RELEASE_MANIFEST}|g" \
       -e "s|__REPO__|${CNE_REPO}|g" \
       -e "s|__ISSUER__|${CLUSTER_ISSUER}|g" \
@@ -35,8 +56,9 @@ render_cneinstance() {
       -e "s|__DPUENABLED__|${BNK_DPU_ENABLED:-false}|g" \
       -e "s|__ZEBOS__|${BNK_ZEBOS_STATE:-}|g" \
       "$prof" \
-    | awk -v blk="$attach_block" -v cr="$calico_router" '
+    | awk -v blk="$attach_block" -v cr="$calico_router" -v sb="$scope_block" '
         $0 == "__ATTACHMENTS__"   { if (blk != "") print blk; next }
         $0 == "__CALICOROUTER__"  { if (cr  != "") print cr;  next }
+          $0 == "__CLUSTERSCOPE__"  { print sb; next }
         { print }'
 }

@@ -10,7 +10,7 @@ spec:
     gatewayAPI: true
     type: BNK
   manifestVersion: "__MANIFEST__"
-  wholeCluster: true
+__CLUSTERSCOPE__
   dpu:
     enabled: __DPUENABLED__
   telemetry:
