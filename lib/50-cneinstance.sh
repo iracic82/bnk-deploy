@@ -86,4 +86,25 @@ else
     --no-headers 2>/dev/null \
     | awk '{ ready = ($4 == "<none>" ? 0 : $4); if (ready != $3) printf "        %s/%s: %s/%s ready\n", $1, $2, ready, $3 }' \
     || true
+
+    # Say whether this is slow or broken, because the two need opposite responses and nothing above
+    # distinguishes them. A stack still pulling images looks identical to a stack that will never come
+    # up, right until you count what the pods are actually doing.
+    for ns in "$NS_CORE" "$NS_BNK"; do
+      phases=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null \
+                 | awk '{c[$3]++} END {for (p in c) printf "%s=%s ", p, c[p]}')
+      [[ -n "$phases" ]] && echo "        $ns pods: $phases"
+    done
+    # A container in ContainerCreating with no pull error means the only thing wrong is the timeout.
+    waiting=$(kubectl get pods -A \
+                -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}{.state.waiting.reason}{"\n"}{end}{end}' 2>/dev/null \
+                | grep -c . || true)
+    stuck=$(kubectl get pods -A \
+              -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}{.state.waiting.reason}{"\n"}{end}{end}' 2>/dev/null \
+              | grep -c 'ImagePullBackOff\|ErrImagePull\|CrashLoopBackOff' || true)
+    if [[ "${waiting:-0}" -gt 0 && "${stuck:-0}" -eq 0 ]]; then
+      warn "${waiting} container(s) still waiting and none of them failed a pull, so the stack is coming up and this is a timeout rather than a failure. Raise BNK_WAIT_TIMEOUT, currently ${BNK_WAIT_TIMEOUT:-900}s."
+    elif [[ "${stuck:-0}" -gt 0 ]]; then
+      warn "${stuck} container(s) are failing to pull or crash looping, which is a real failure rather than slowness."
+    fi
 fi
