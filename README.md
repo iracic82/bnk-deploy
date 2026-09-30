@@ -435,6 +435,7 @@ and a new workflow gets one for free.
 | `dispatch` | manual | hosted then self hosted | deliberate fleet wide work, such as rolling out a version bump. Applying to more than one cluster needs `BNK_FLEET_APPLY_ENABLED` |
 | `cluster-check` | dispatch, daily | self hosted | verification only, drift detection |
 | `e2e-kind` | PR, push | hosted | throwaway 1.30 cluster with Calico. Runs phases 00 to 40 plus a server side CNEInstance validation, twice, to prove idempotency. It cannot install the data plane, see below |
+| `upgrade` | manual | self hosted | upgrades one cluster. Plan, snapshot, health gate, rollback on failure. The snapshot is kept as a build artifact for 90 days |
 | `dpubnkctl-deploy` | dispatch | jumphost | bare metal DPU build |
 
 `apply` and `dispatch` both call `deploy`, so there is one implementation of an install and no
