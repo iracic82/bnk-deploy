@@ -102,6 +102,13 @@ else
     stuck=$(kubectl get pods -A \
               -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}{.state.waiting.reason}{"\n"}{end}{end}' 2>/dev/null \
               | grep -c 'ImagePullBackOff\|ErrImagePull\|CrashLoopBackOff' || true)
+    # The lifecycle operator is the thing that lays the stack out, so when nothing is pulling and
+    # nothing is failing, its log is the only place the answer can be. Run 16 timed out with one pod,
+    # no pulls in flight and no warnings, and this dump would have said why in one line.
+    echo "        lifecycle operator, last errors and CNEInstance reconcile lines:"
+    kubectl logs -n "$NS_CORE" -l app.kubernetes.io/name=f5-lifecycle-operator --tail=400 2>/dev/null \
+      | grep -iE '"l"="error"|panic|CNEInstance|validat|requeu' | tail -12 | cut -c1-230 | sed 's/^/          /' \
+      || echo "          no operator log available"
     if [[ "${waiting:-0}" -gt 0 && "${stuck:-0}" -eq 0 ]]; then
       warn "${waiting} container(s) still waiting and none of them failed a pull, so the stack is coming up and this is a timeout rather than a failure. Raise BNK_WAIT_TIMEOUT, currently ${BNK_WAIT_TIMEOUT:-900}s."
     elif [[ "${stuck:-0}" -gt 0 ]]; then
