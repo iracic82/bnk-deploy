@@ -102,14 +102,54 @@ if [[ -n "$KUBE_CONTEXT" ]]; then
     || { echo "no kubectl context named $KUBE_CONTEXT"; exit 2; }
 fi
 
-log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
-ok()   { printf '    \033[0;32mok\033[0m  %s\n' "$*"; }
-warn() { printf '    \033[0;33m!!\033[0m  %s\n' "$*"
+# A run summary, so clicking a workflow run shows what happened rather than raw logs. Written by
+# the installer itself, which means every workflow that calls it gets one without duplicating the
+# reporting. Harmless outside CI, where GITHUB_STEP_SUMMARY is unset.
+_SUMMARY="$(mktemp)"
+_sum() { printf '%s\n' "$*" >> "$_SUMMARY"; }
+_emit_summary() {
+  local rc=$?
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    {
+      if [[ "$rc" -eq 0 ]]; then echo "## BNK ${BNK_VERSION} installed"; else echo "## BNK ${BNK_VERSION} run failed"; fi
+      echo
+      echo "| | |"
+      echo "|---|---|"
+      echo "| Cluster | \`$(kubectl config current-context 2>/dev/null || echo unknown)\` |"
+      echo "| Environment | \`${BNK_ENV_NAME}\` |"
+      echo "| Profile | \`${PROFILE}\` (dpu=${BNK_DPU_ENABLED:-false}, mtu=${BNK_TMM_MTU:-1500}) |"
+      echo "| Size | ${BNK_DEPLOYMENT_SIZE} |"
+      echo "| Mode | $([[ "$DRY_RUN" == 1 ]] && echo 'plan, nothing changed' || echo 'apply')$([[ "$SKIP_LICENSE" == 1 ]] && echo ', unlicensed') |"
+      echo
+      echo "### Phases"
+      echo
+      cat "$_SUMMARY"
+      echo
+      if command -v kubectl >/dev/null 2>&1; then
+        echo "### Cluster after the run"
+        echo
+        echo '```'
+        echo "licence:      $(kubectl get license.k8s.f5net.com -n "$NS_CORE" -o jsonpath='{.items[0].status.state}' 2>/dev/null || echo 'none')"
+        echo "CNEInstance:  Available=$(kubectl get cneinstance -n "$NS_BNK" -o jsonpath='{.items[0].status.conditions[?(@.type=="Available")].status}' 2>/dev/null || echo '-')"
+        echo "TMM:          $(kubectl get ds -n "$NS_BNK" f5-tmm -o jsonpath='{.status.numberReady}/{.status.desiredNumberScheduled} ready' 2>/dev/null || echo 'not deployed')"
+        echo "pods:         $(kubectl get pods -n "$NS_CORE" --no-headers 2>/dev/null | grep -c Running) in $NS_CORE, $(kubectl get pods -n "$NS_BNK" --no-headers 2>/dev/null | grep -c Running) in $NS_BNK"
+        echo '```'
+      fi
+    } >> "$GITHUB_STEP_SUMMARY"
+  fi
+  rm -f "$_SUMMARY"
+}
+trap _emit_summary EXIT
+
+log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; _sum ""; _sum "**$***"; }
+ok()   { printf '    \033[0;32mok\033[0m  %s\n' "$*"; _sum "- ✅ $*"; }
+warn() { printf '    \033[0;33m!!\033[0m  %s\n' "$*"; _sum "- ⚠️ $*"
          if [[ "${BNK_STRICT_PREFLIGHT:-false}" == "true" ]]; then
            printf '    \033[0;31mXX\033[0m  strict mode, warnings are fatal in %s\n' "$BNK_ENV_NAME" >&2; exit 1
          fi; }
-die()  { printf '    \033[0;31mXX\033[0m  %s\n' "$*" >&2; exit 1; }
-export -f log ok warn die
+die()  { printf '    \033[0;31mXX\033[0m  %s\n' "$*" >&2; _sum "- ❌ **$***"; exit 1; }
+export -f log ok warn die _sum
+export _SUMMARY
 
 printf '\n\033[1m  BNK %s  env=%s  profile=%s  size=%s%s%s%s\033[0m\n' \
   "$BNK_VERSION" "$BNK_ENV_NAME" "$PROFILE" "$BNK_DEPLOYMENT_SIZE" "${COMBO_NOTE:-}" \

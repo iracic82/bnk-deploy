@@ -70,6 +70,7 @@ data plane and no obvious reason why.
 | Kubernetes | **1.30** | The version BNK 2.3 is qualified against |
 | CNI | **Calico** | The primary supported CNI. Flannel, VPC-CNI on EKS, OCI-CNI on Oracle and OVN-Kubernetes on OpenShift are recognised. **Cilium is not supported** and the operator will refuse it |
 | Hugepages | allocated on every node that will run TMM | TMM uses DPDK. Without them TMM is never scheduled, and no override removes the requirement |
+| TMM node label | `kubectl label node <NODE> app=f5-tmm` on at least one node | **Easy to miss and gives a terrible error.** Without it the operator panics with `assignment to entry in nil map` at `f5tmm_daemonset.go:186`, naming neither TMM nor the label. Preflight checks it |
 | CPU | roughly **17 vCPU of requests** across the cluster | Measured at `deploymentSize: Small`: about 8.4 vCPU requested in `f5-cne-core` and the same again in `f5-bnk`. Pods sit Pending with `Insufficient cpu` if the cluster cannot satisfy it |
 | Storage | a default StorageClass | The datastore components need persistent volumes |
 | Egress | outbound to `repo.f5.com` | 81 component images are pulled from there |
@@ -354,7 +355,15 @@ flowchart TB
     style TMM stroke-dasharray: 5 4
 ```
 
-**1. The operator will not start without the Multus CRD.** Even for a host install that uses no
+**1. No node label, no data plane, and a stack trace instead of an explanation.** The host install
+path requires `kubectl label node <NODE> app=f5-tmm`, and the docs say plainly that without it
+nothing schedules TMM. What actually happens is that the Lifecycle Operator panics with
+`assignment to entry in nil map` at `f5tmm_daemonset.go:186`, recovers, requeues and panics again
+every few minutes, while every other component reports healthy. Verified on a real cluster: adding
+the label moved `f5tmm` from `Reconciled=Unknown` to `Reconciled=True` and the DaemonSet appeared
+in seconds. Preflight checks for the label, and also warns if a labelled node has no hugepages.
+
+**6. The operator will not start without the Multus CRD.** Even for a host install that uses no
 network attachments, the Lifecycle Operator crash loops on `if kind is a CRD, it should be
 installed before calling Start`. Nothing in the install guide mentions this, and the error does not
 point at Multus. Phase 10 installs Multus before phase 30 installs the operator, and phase 30
@@ -378,6 +387,16 @@ comes up and the data plane does not. Verification reports that as expected rath
 so you are not left hunting a problem that is not there.
 
 ---
+
+## Run summaries
+
+Every workflow that installs or plans writes a summary, so clicking a run shows what happened
+instead of raw logs: the cluster and context it touched, the environment and profile, whether it was
+a plan or an apply, each phase with a tick or a warning, and the licence, CNEInstance and TMM state
+afterwards.
+
+The installer emits it itself rather than each workflow building its own, so they cannot disagree
+and a new workflow gets one for free.
 
 ## Workflows
 
@@ -431,9 +450,10 @@ environment and profile combinations validate server side and render correctly d
 Both runner topologies exercised, including a context that does not exist failing rather than
 silently operating on the wrong cluster.
 
-**Not yet verified**, and this is the honest gap: a **licensed** install. Everything downstream of
-the licence activating, TMM included, is unexercised. The licence gate sits in front of the data
-plane entirely, so an unlicensed run cannot reach it.
+**A licensed install is verified.** The licence reaches `Active` in connected mode, the operator
+then creates the TMM DaemonSet, and TMM comes up with both readiness gates satisfied,
+`ConfigurationDone` and `RoutingDone`. Final state on a three node cluster: `CNEInstance
+Available=True`, `F5TmmAvailable=True`, TMM 1/1 ready, 13 pods in `f5-cne-core` and 10 in `f5-bnk`.
 
 **DPU mode** is validated as far as rendering and preflight. The node level work, flashing and
 scalable functions, needs real BlueField hardware to prove.
