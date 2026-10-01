@@ -13,6 +13,7 @@ spec:
     type: BNK
   manifestVersion: "__MANIFEST__"
 __CLUSTERSCOPE__
+__ATTACHMENTS__
   dpu:
     enabled: __DPUENABLED__
   telemetry:
