@@ -74,8 +74,23 @@ else
   warn "Multus CRD absent. Phase 10 installs it. FLO cannot start without it."
 fi
 
-kubectl get sc --no-headers 2>/dev/null | grep -q . || die "no StorageClass. BNK needs persistent volumes."
+kubectl get sc --no-headers 2>/dev/null | grep -q . || die "no StorageClass. BNK needs persistent volumes. On a bare or kind cluster install one first (e.g. rancher local-path-provisioner) and re-run."
 ok "storageclass: $(kubectl get sc --no-headers | awk '$2!=""{print $1}' | head -1)"
+
+# CPU floor. BNK requests ~22.5 vCPU in total, and TMM alone is 4.6; kubeadm reserves no CPU, so
+# allocatable equals capacity and there is no hidden headroom. Below ~24 vCPU, phase 50 does not fail
+# cleanly, it sits Pending with Insufficient cpu until BNK_WAIT_TIMEOUT. Catch it here in two seconds.
+need_vcpu="${BNK_MIN_VCPU:-24}"
+cpu_milli="$(kubectl get nodes -o jsonpath='{.items[*].status.allocatable.cpu}' 2>/dev/null | tr ' ' '\n' | awk '
+  /m$/ { sub(/m$/,""); s += $1; next }
+  NF   { s += $1 * 1000 }
+  END  { printf "%d", s }')"
+cpu_vcpu=$(( ${cpu_milli:-0} / 1000 ))
+if [[ "$cpu_vcpu" -lt "$need_vcpu" ]]; then
+  warn "cluster has ~${cpu_vcpu} vCPU allocatable; BNK needs ~${need_vcpu} (TMM alone is 4.6 vCPU + 4Gi hugepages, and DSSM runs 3+3 replicas that cannot be scaled down). Phase 50 will sit Pending with Insufficient cpu."
+else
+  ok "cpu: ~${cpu_vcpu} vCPU allocatable (need ~${need_vcpu})"
+fi
 
 # The TMM node label and the DPU taint are checked in phase 05, which also applies them when the
 # cluster file asks it to.

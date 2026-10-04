@@ -2,8 +2,6 @@
 prof="$HERE/profiles/${PROFILE}.yaml"
 [[ -r "$prof" ]] || die "no profile at $prof"
 
-sc="${BNK_STORAGECLASS:-}"
-[[ -n "$sc" ]] && kubectl get sc "$sc" >/dev/null 2>&1 || sc="$(kubectl get sc -o jsonpath='{.items[0].metadata.name}')"
 # shellcheck disable=SC1091
 source "$HERE/lib/render.sh"
 
