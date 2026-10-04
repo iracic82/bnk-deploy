@@ -18,6 +18,7 @@ export BNK_LICENSE_JWT='eyJ...'          # omit and pass --skip-license to insta
 ./install.sh --dry-run --skip-license    # validate everything server side, change nothing
 ./install.sh --phase 70                  # run one phase, here just the verification
 ./uninstall.sh                           # remove BNK, leave cert-manager and Calico alone
+./uninstall.sh --full                    # also remove BNK's cert-manager CA chain (clean teardown)
 ```
 
 ## What it needs
@@ -59,7 +60,7 @@ Each is a file in `lib/` and can be run alone with `--phase NN`.
 
 | Phase | Does |
 |---|---|
-| 00 preflight | Tooling, cluster reachability, Kubernetes minor, CNI identification, Multus CRD, StorageClass, hugepages. Fails fast. |
+| 00 preflight | Tooling, cluster reachability, Kubernetes minor, CNI identification, Multus CRD, StorageClass, hugepages, allocatable CPU floor. Fails fast. |
 | 10 prereqs | Multus, cert-manager, the three object CA chain with a `CA:TRUE` assertion. |
 | 20 registry | Helm OCI login, both namespaces, the pull secret in each. |
 | 30 flo | The Lifecycle Operator, with a restart if it raced the CRDs. |
@@ -81,7 +82,7 @@ empty and `vfio.enabled: false`, and the CNEInstance CRD requires only `certific
 flashed BlueField, scalable functions with trust on, OVS bridges and hugepages. That part is node
 provisioning and belongs in Ansible rather than here.
 
-Override per environment with `BNK_STORAGECLASS` and `BNK_POD_CIDR`.
+Override per environment with `BNK_STORAGECLASS`, `BNK_POD_CIDR`, and `BNK_MIN_VCPU` (the preflight CPU floor, default 24).
 
 ## CI
 

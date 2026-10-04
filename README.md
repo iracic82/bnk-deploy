@@ -76,7 +76,7 @@ data plane and no obvious reason why.
 | CNI | **Calico** | The primary supported CNI. Flannel, VPC-CNI on EKS, OCI-CNI on Oracle and OVN-Kubernetes on OpenShift are recognised. **Cilium is not supported** and the operator will refuse it |
 | Hugepages | allocated on every node that will run TMM | TMM uses DPDK. Without them TMM is never scheduled, and no override removes the requirement |
 | TMM node label | `kubectl label node <NODE> app=f5-tmm` on at least one node | **Easy to miss and gives a terrible error.** Without it the operator panics with `assignment to entry in nil map` at `f5tmm_daemonset.go:186`, naming neither TMM nor the label. Preflight checks it |
-| CPU | roughly **17 vCPU of requests** across the cluster | Measured at `deploymentSize: Small`: about 8.4 vCPU requested in `f5-cne-core` and the same again in `f5-bnk`. Pods sit Pending with `Insufficient cpu` if the cluster cannot satisfy it |
+| CPU | roughly **20 vCPU of requests**, ~24 recommended | Measured on a 2.4.0 install at `deploymentSize: Small`: ~20 vCPU across `f5-cne-core` and `f5-bnk`, of which TMM alone is 4.6 (a single pod). Preflight now sums allocatable vCPU and warns below `BNK_MIN_VCPU` (default 24); kubeadm reserves no CPU, so allocatable equals capacity and there is no hidden headroom. Below it, pods sit Pending with `Insufficient cpu` |
 | Storage | a default StorageClass | The datastore components need persistent volumes |
 | Egress | outbound to `repo.f5.com` | 81 component images are pulled from there |
 | Tooling | `kubectl`, `helm`, `openssl` | On whatever runs the installer |
@@ -162,6 +162,7 @@ export BNK_LICENSE_JWT='eyJ...'                     # your F5 licence token
 ./install.sh --env lab --profile host               # install
 ./install.sh --env lab --phase 70                   # verify only
 ./uninstall.sh                                      # remove BNK, leave cert-manager and Calico
+./uninstall.sh --full                               # also remove BNK's cert-manager CA chain
 ```
 
 Re-running is safe. Every phase detects what already exists, so a second run is a no op rather
@@ -174,7 +175,7 @@ starting over.
 
 | | |
 |---|---|
-| 00 preflight | Tooling, cluster reachability, Kubernetes version, CNI identification, Multus CRD, StorageClass, hugepages. Fails fast |
+| 00 preflight | Tooling, cluster reachability, Kubernetes version, CNI identification, Multus CRD, StorageClass, hugepages, allocatable CPU floor. Fails fast |
 | 10 prereqs | Multus, cert-manager, and the three object certificate authority chain |
 | 20 registry | Registry login, namespaces, image pull secrets |
 | 30 flo | The F5 Lifecycle Operator, which reconciles everything after it |
@@ -486,7 +487,7 @@ what `dpubnkctl/run.sh` covers.
 **Not covered:** `F5SPKVlan` self IP configuration. Upgrades are implemented with known limits, see
 [Upgrades](#upgrades).
 
-**`e2e-kind` scope.** A GitHub hosted runner provides 4 vCPU and BNK requests approximately 17, so a
+**`e2e-kind` scope.** A GitHub hosted runner provides 4 vCPU and BNK requests roughly 20, so a
 full install cannot run there. The workflow covers phases 00 to 40 plus server side validation of the
 CNEInstance, twice, to prove idempotency. Data plane installation is exercised against a real cluster
 by `plan` and `apply`.
