@@ -37,6 +37,24 @@ else
   ok "cert-manager ${CERT_MANAGER_VERSION} ready"
 fi
 
+# Deployment rollout complete is NOT the same as the webhook actually serving: for a few seconds the
+# API server -> webhook call can still be refused (cert injection / endpoint routing lag), which
+# intermittently failed the very next cert-manager apply (the ClusterIssuer below) with
+# "connection refused". Probe the webhook with a server dry-run Issuer until it accepts a request.
+for _ in $(seq 1 60); do
+  kubectl apply --dry-run=server -f - >/dev/null 2>&1 <<'PROBE' && break
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: webhook-readiness-probe
+  namespace: cert-manager
+spec:
+  selfSigned: {}
+PROBE
+  sleep 3
+done
+ok "cert-manager webhook is serving"
+
 # --- CA chain. selfsigned issuer -> CA cert -> CA ClusterIssuer.
 # The CA CommonName MUST differ from the leaf CNs or CWC crash loops on an x509 error.
 "${KA[@]}" <<YAML >/dev/null
