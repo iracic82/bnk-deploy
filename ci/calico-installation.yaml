@@ -4,6 +4,14 @@ metadata:
   name: default
 spec:
   calicoNetwork:
+    # Use the Kubernetes node InternalIP (the real GCP NIC, 10.192.0.x) as each node's address.
+    # Without this, Calico autodetection picks the first usable interface - and the pcie gretap overlay
+    # (br0, 10.1.20.x, created by scripts/pcie-overlay.sh for TMM's VLAN) gets chosen. VXLAN VTEPs then
+    # land on 10.1.20.x, which only exists on the dpu<->server gretap; the control-plane node (bnk) is
+    # not on that overlay, so bnk<->server pod traffic (grafana->prometheus/CoreDNS) is undeliverable.
+    # NodeInternalIP keeps Calico on the real NIC that every node shares, so VXLAN works cluster-wide.
+    nodeAddressAutodetectionV4:
+      kubernetes: NodeInternalIP
     ipPools:
       - blockSize: 26
         cidr: 192.168.0.0/16
