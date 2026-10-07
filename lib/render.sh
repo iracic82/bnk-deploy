@@ -16,6 +16,17 @@ render_cneinstance() {
     for a in "${_na[@]}"; do attach_block+=$'\n'"    - ${a}"; done
   fi
 
+  # eppNamespaces authorizes the controller to render F5 Endpoint Picker stacks in those namespaces.
+  # Setting it at install (rather than patching the live CNEInstance) avoids the controller rollout
+  # that a post-install patch triggers - which, on a CPU-tight cluster, can leave the new pod Pending.
+  local epp_block="" e
+  if [[ -n "${BNK_EPP_NAMESPACES:-}" ]]; then
+    epp_block="  eppNamespaces:"
+    local -a _epp
+    IFS=',' read -ra _epp <<< "$BNK_EPP_NAMESPACES"
+    for e in "${_epp[@]}"; do epp_block+=$'\n'"    - ${e}"; done
+  fi
+
   # TMM_CALICO_ROUTER applies only on Calico. The documented preflight runs extra pod CIDR and TMM
   # env var checks for Calico specifically, so setting it on Flannel or OVN would be wrong.
   local calico_router=""
@@ -55,9 +66,12 @@ render_cneinstance() {
       -e "s|__CORECOLLECT__|${BNK_CORE_COLLECTION:-false}|g" \
       -e "s|__DPUENABLED__|${BNK_DPU_ENABLED:-false}|g" \
       -e "s|__ZEBOS__|${BNK_ZEBOS_STATE:-}|g" \
+      -e "s|__MAPRES__|${BNK_TMM_MAPRES:-false}|g" \
+      -e "s|__CHKOFF__|${BNK_DISABLE_CHECKSUM_OFFLOAD:-false}|g" \
       "$prof" \
-    | awk -v blk="$attach_block" -v cr="$calico_router" -v sb="$scope_block" '
+    | awk -v blk="$attach_block" -v cr="$calico_router" -v sb="$scope_block" -v epp="$epp_block" '
         $0 == "__ATTACHMENTS__"   { if (blk != "") print blk; next }
+        $0 == "__EPPNAMESPACES__" { if (epp != "") print epp; next }
         $0 == "__CALICOROUTER__"  { if (cr  != "") print cr;  next }
           $0 == "__CLUSTERSCOPE__"  { print sb; next }
         { print }'

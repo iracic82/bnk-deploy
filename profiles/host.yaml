@@ -14,6 +14,7 @@ spec:
   manifestVersion: "__MANIFEST__"
 __CLUSTERSCOPE__
 __ATTACHMENTS__
+__EPPNAMESPACES__
   dpu:
     enabled: __DPUENABLED__
   telemetry:
@@ -38,7 +39,15 @@ __ATTACHMENTS__
 __CALICOROUTER__
         - name: TMM_DEFAULT_MTU
           value: "__MTU__"
+        # true only when networkAttachments are used (BNK_TMM_MAPRES): maps the extra macvlan legs
+        # onto TMM's data plane so interfaces 1.1/1.2 appear. Harmless ("false") without attachments.
+        - name: TMM_MAPRES_ADDL_VETHS_ON_DP
+          value: "__MAPRES__"
     pseudoCNI:
       env:
         - name: EXCLUDE_CIDR
           value: "__PODCIDR__"
+        # disable checksum offload on TMM's interfaces - required when the data NICs ride a gretap
+        # overlay (offloaded checksums are wrong after GRE encap, so packets drop). false by default.
+        - name: DISABLE_CHECKSUM_OFFLOAD
+          value: "__CHKOFF__"
